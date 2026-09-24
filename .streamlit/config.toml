@@ -1,0 +1,9 @@
+# Local-only dashboard settings.
+[server]
+address = "localhost"   # only reachable from this computer
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"  # hides Streamlit's "Deploy" button: this app is never published

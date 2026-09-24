@@ -1,0 +1,6 @@
+# OmKakaFinance dependencies (Python 3.11 or newer).
+# Install with:  .venv\Scripts\python.exe -m pip install -r requirements.txt
+streamlit>=1.50,<2      # the browser dashboard
+python-dotenv>=1.0,<2   # reads secrets from your local .env file
+tzdata>=2024.1          # timezone data (needed on Windows for America/New_York)
+pytest>=8,<10           # runs the automated checks

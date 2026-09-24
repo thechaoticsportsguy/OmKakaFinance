@@ -1,0 +1,36 @@
+# OmKakaFinance settings. Safe to commit: NO secrets in this file.
+# Secrets belong in .env (see .env.example).
+
+[app]
+timezone = "America/New_York"
+
+[storage]
+# Paths are relative to the project folder.
+# Live research and the offline demo use SEPARATE database files so fixture
+# data can never mix with real research.
+live_db_path = "data/omkaka.db"
+demo_db_path = "data/demo/omkaka_demo.db"
+
+[budget]
+# Total authorized spending ceiling in US dollars. It does NOT reset.
+# It covers Claude API calls AND any paid data services.
+total_ceiling_usd = 100.00
+period = "total_no_reset"
+covers = ["anthropic_api", "paid_data_services"]
+# Paid work stops before reaching the ceiling by at least this amount.
+safety_margin_usd = 10.00
+# Master switch. Changing this alone does NOT authorize spending; the owner
+# must explicitly approve paid calls, and the spending ledger (Phase 3) must
+# exist. Phase 1 code refuses paid calls regardless.
+paid_calls_enabled = false
+
+[staleness_hours]
+# Data older than this is shown as STALE.
+# Market data allows 96h for now so a Friday close is not "stale" on Monday
+# morning; Phase 4 replaces this with a real trading calendar.
+market_data = 96
+news = 72
+filing = 2160      # about 90 days
+reddit = 72
+press_release = 720
+default = 72

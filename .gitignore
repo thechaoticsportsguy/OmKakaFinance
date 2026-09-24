@@ -1,0 +1,16 @@
+# Secrets - never commit these
+.env
+.env.*
+!.env.example
+
+# Local databases and data (your journal lives here - back it up, don't commit it)
+data/
+
+# Python / tooling clutter
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.streamlit/secrets.toml
+*.log
