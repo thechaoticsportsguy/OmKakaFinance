@@ -16,6 +16,7 @@ from typing import Callable
 from . import journal, store
 from .config import Settings, get_secret
 from .db import transaction
+from .market_calendar import previous_trading_day, trading_days_before
 from .models import SourceType, Status, ValueKind
 from .screening import catalyst_filings, prefilter, shortlist_flags
 from .sources import finnhub as fh
@@ -66,6 +67,10 @@ def build_clients(conn, settings: Settings, transport=None, sleep=time.sleep,
         clients.reddit.api_base = "https://example.com/demo-reddit"
         clients.reddit.auth_url = "https://example.com/demo-reddit/token"
     return clients
+
+
+def extra_closed(settings: Settings) -> tuple[str, ...]:
+    return tuple(settings.raw.get("schedule", {}).get("extra_closed_dates", []))
 
 
 def recent_weekdays(before: date, count: int) -> list[date]:
@@ -136,14 +141,17 @@ class ScreenRun:
         self.log("2/6 End-of-day prices (Massive, free plan: ~12 s between calls)...")
         lookback = int(self.cfg["lookback_trading_days"])
         have = {row[0] for row in self.conn.execute("SELECT DISTINCT trade_date FROM market_bars WHERE provider='massive'")}
-        for day in recent_weekdays(today, lookback + 5):
+        closed = extra_closed(self.settings)
+        keep = set(members) | {self.settings.raw.get("benchmark", {}).get("ticker", "SPY")}
+        for day in trading_days_before(today, lookback + 2, closed):
             if day.isoformat() in have:
                 continue
             res = self.c.massive.grouped_daily(day)
             rows = ms.parse_grouped_daily(res.data) if res.ok else []
             if res.ok and not rows:
-                res.status = Status.NO_RESULTS  # market closed (holiday) - not a failure
+                res.status = Status.NO_RESULTS  # no trading reported (unscheduled closure?) - not a failure
             self.check("Market data (end of day)", res, query=f"grouped daily {day}", count=len(rows))
+            rows = [r for r in rows if r["ticker"] in keep]
             if rows:
                 self._store_bars(day, rows, res)
             if res.status is Status.RATE_LIMITED:
@@ -154,10 +162,10 @@ class ScreenRun:
         if not dates:
             return self._fail("No price data available (see source health).")
         latest_trade_date = dates[0]
-        age_hours = (now - ms.market_close(date.fromisoformat(latest_trade_date))).total_seconds() / 3600
-        if age_hours > self.settings.staleness_hours("market_data"):
-            return self._fail(f"Latest price data is stale (close of {latest_trade_date}, {age_hours:.0f} hours old). "
-                              "Screening stopped rather than rank companies on old prices.")
+        expected = previous_trading_day(today, closed).isoformat()
+        if latest_trade_date < expected:
+            return self._fail(f"Latest price data is stale: newest close is {latest_trade_date}, but the market "
+                              f"traded on {expected}. Screening stopped rather than rank companies on old prices.")
         bars: dict[str, list[dict]] = {}
         for row in self.conn.execute(
                 f"SELECT ticker, trade_date, close, volume FROM market_bars WHERE provider='massive' "
@@ -179,7 +187,7 @@ class ScreenRun:
         # 4. Recent filings across the market (catalysts) --------------------
         self.log("4/6 Recent filings index (SEC)...")
         eightk: dict[str, int] | None = {}
-        for day in recent_weekdays(today, int(self.cfg["catalyst_lookback_days"])):
+        for day in trading_days_before(today, int(self.cfg["catalyst_lookback_days"]), closed):
             res = self.check("SEC daily filings index", self.c.sec.daily_index(day), query=f"form index {day}")
             if res.ok:
                 for f in sec.parse_daily_index(res.data):

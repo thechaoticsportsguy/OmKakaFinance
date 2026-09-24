@@ -53,5 +53,6 @@
      "price": 14.00, "shares": 20000000, "shares_year_ago": 20000000, "volume": 20000, "trend": 0.0, "last_day_volume_x": 1.0,
      "eightk_count": 0, "_shows": "fails: average daily dollar volume too low"}
   ],
+  "benchmarks": [{"ticker": "SPY", "price": 600.0, "trend": 0.02, "volume": 50000000}],
   "demo_watchlist": ["DEMOC"]
 }

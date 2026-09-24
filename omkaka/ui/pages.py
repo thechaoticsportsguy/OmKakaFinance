@@ -41,9 +41,32 @@ def _latest_decision(conn):
 
 # ------------------------------------------------------------------ pages
 
+def _day_status(settings) -> tuple[str | None, object]:
+    """(closed reason or None, the trading date today's brief should cover)."""
+    from datetime import datetime, time as dtime
+
+    from ..market_calendar import closed_reason, previous_trading_day
+    from ..timeutil import NEW_YORK, utc_now
+
+    sched = settings.raw["schedule"]
+    closed = tuple(sched.get("extra_closed_dates", []))
+    now_ny = utc_now().astimezone(NEW_YORK)
+    today = now_ny.date()
+    reason = closed_reason(today, closed)
+    start = dtime.fromisoformat(sched["window_start"])
+    if reason or now_ny.time() < start:
+        return reason, previous_trading_day(today, closed)
+    return None, today
+
+
 def page_today(conn, settings) -> None:
-    st.header("Today's candidate")
+    st.header("Today's research result")
+    closed, expected = _day_status(settings)
+    if closed:
+        st.info(f"Market closed today ({closed}). No new brief is produced; showing the latest one.")
     entry = _latest_decision(conn)
+    if entry is not None and "brief_markdown" in json.loads(entry["payload_json"]):
+        return _render_brief_entry(conn, settings, entry, expected)
     if entry is None:
         st.warning("No research result yet. For now: run a screen, then build a research packet on the "
                    "Screening page and review it with your own Claude access. (Try the demo: `python -m omkaka demo`.)")
@@ -146,6 +169,89 @@ def _screen_runs(conn):
 
 def _fmt_money(v):
     return "Data unavailable" if v is None else f"${v / 1e6:,.1f}M"
+
+
+def _render_brief_entry(conn, settings, entry, expected) -> None:
+    p = json.loads(entry["payload_json"])
+    v = p.get("validation", {})
+    trading_date = p.get("trading_date")
+    if trading_date and trading_date < expected.isoformat():
+        st.error(f"STALE: this result is for {trading_date}. There is no result yet for {expected.isoformat()} "
+                 "(see Health page for the last run and any missed runs).")
+    if p.get("late"):
+        st.warning(f"LATE: this result became available at {format_new_york(p.get('available_at'))}, "
+                   f"after the {settings.raw['schedule']['deadline']} New York deadline.")
+    status_color = {"passed": "green", "flagged": "orange", "rejected": "red"}.get(v.get("status"), "gray")
+    st.markdown(f"**{esc(entry['title'])}** · check result :{status_color}[**{v.get('status', 'unknown').upper()}**] · "
+                f"{esc(p.get('origin', ''))}")
+    st.caption(f"Recorded {format_new_york(entry['fetched_at'])} · journal entry {entry['entry_id']}"
+               + (f" · covers trading date {trading_date}" if trading_date else ""))
+    for c in journal.corrections_for(conn, entry["entry_id"]):
+        st.warning(f"**Correction ({format_new_york(c['fetched_at'])}):** {esc(c['body'])}")
+    for w in v.get("warnings", []):
+        st.warning(esc(w))
+    if entry["run_id"]:
+        from ..packet import group_checks
+        checks = conn.execute("SELECT * FROM source_checks WHERE run_id=? AND (ticker IS NULL OR ticker=?)",
+                              (entry["run_id"], p.get("candidate"))).fetchall()
+        cov = coverage_summary(checks)
+        cols = st.columns(4)
+        cols[0].metric("Source calls OK", cov["ok"])
+        cols[1].metric("No results", cov["no_results"])
+        cols[2].metric("Partial", cov["partial"])
+        cols[3].metric("Unavailable", cov["unavailable"])
+        with st.expander("Source coverage details"):
+            st.dataframe(group_checks(checks), hide_index=True, width="stretch")
+    body = [l for l in p["brief_markdown"].splitlines() if not l.strip().upper().startswith(("CANDIDATE:", "RUN:"))]
+    body = [("###" + l[1:]) if l.startswith("# ") else ("####" + l[2:]) if l.startswith("## ") else l for l in body]
+    st.markdown(esc("\n".join(body)))
+    if p.get("packet_path"):
+        from pathlib import Path
+        path = Path(p["packet_path"])
+        if path.exists():
+            st.download_button("Download the research packet for this run", path.read_text(encoding="utf-8"),
+                               file_name=path.name, mime="text/markdown")
+
+
+def page_review(conn, settings) -> None:
+    from .. import review
+    from ..brief import candidate_brief, no_candidate_brief
+    from ..selection import select_candidate
+
+    st.header("Review a brief")
+    st.write("Paste a brief (yours, or one written by your own Claude from the research packet). The app checks "
+             "every number against the right company, metric, period and source, and every citation against the "
+             "evidence available at the run's cutoff. Nothing is sent anywhere.")
+    runs = _screen_runs(conn)
+    if not runs:
+        st.warning("No screening run yet.")
+        return
+    labels = {f"{r['run_id']} · {format_new_york(r['started_at'])}": r for r in runs}
+    run = labels[st.selectbox("Run", list(labels))]
+    if st.button("Start from the automatic data-only brief"):
+        chosen, table = select_candidate(conn, run["run_id"], settings)
+        st.session_state["brief_text"] = (candidate_brief(conn, run["run_id"], chosen, settings.is_demo) if chosen
+                                          else no_candidate_brief(run["run_id"], table))
+    text = st.text_area("Brief", key="brief_text", height=350,
+                        placeholder=f"CANDIDATE: TICKER\nRUN: {run['run_id']}\n- [CONFIRMED] ... [ev: ...]")
+    if st.button("Check brief") and text.strip():
+        st.session_state["brief_report"] = review.validate(conn, text, run["run_id"])
+    report = st.session_state.get("brief_report")
+    if report:
+        color = {"passed": "green", "flagged": "orange", "rejected": "red"}[report.status]
+        st.markdown(f"### Result: :{color}[{report.status.upper()}]")
+        for e in report.errors:
+            st.error(esc(e))
+        for w in report.warnings:
+            st.warning(esc(w))
+        if report.claims:
+            st.dataframe([{"line": c["line"], "label": c["label"], "claim": c["text"][:120],
+                           "problems": "; ".join(c["problems"]) or "none"} for c in report.claims],
+                         hide_index=True, width="stretch")
+        if st.button("Save to journal" + (" (as a rejected note)" if report.status == "rejected" else "")):
+            entry = review.save_brief(conn, text, report, "Brief checked in the dashboard")
+            st.success(f"Saved as journal entry {entry}.")
+            del st.session_state["brief_report"]
 
 
 def page_watchlist(conn, settings) -> None:
@@ -280,9 +386,121 @@ def page_evidence(conn, settings) -> None:
 
 
 def page_portfolio(conn, settings) -> None:
+    from .. import portfolio as pf
+
     st.header("Paper portfolio vs SPY")
-    st.info("Arrives in Phase 5: up to 15 paper holdings, cash, explicit paper trades only, SPY comparison. "
-            "No real money, no broker.")
+    st.caption("Paper money only: no broker, no real orders. Nothing is bought automatically; every order is yours.")
+    filled = pf.fill_pending(conn, settings)
+    for f in filled:
+        (st.success if f["status"] == "filled" else st.warning)(f"Order {f['order_id']}: {f['status']} "
+                                                                  f"{esc(f.get('reason') or '')}")
+    v = pf.valuation(conn, settings)
+    bm = settings.raw.get("benchmark", {}).get("ticker", "SPY")
+    hist = pf.history(conn, settings)
+    last = hist[-1] if hist else {}
+    cols = st.columns(4)
+    cols[0].metric("Paper cash", f"${v['cash']:,.2f}")
+    cols[1].metric("Total value", "Data unavailable" if v["total"] is None else f"${v['total']:,.2f}")
+    cols[2].metric("Net contributions", f"${v['contributions']:,.2f}")
+    pr, sr = last.get("portfolio_return"), last.get("spy_return")
+    cols[3].metric(f"Return vs {bm} (price-only)", "—" if pr is None else f"{pr:+.2%}",
+                   None if pr is None or sr is None else f"{pr - sr:+.2%} vs {bm} {sr:+.2%}")
+    if v["missing_prices"]:
+        st.error("Data unavailable: no price for " + ", ".join(v["missing_prices"]) +
+                 ". The total is shown as unavailable instead of guessing.")
+
+    st.markdown("#### Holdings")
+    if v["holdings"]:
+        st.dataframe([{"ticker": h["ticker"], "shares": h["shares"],
+                       "last close": "Data unavailable" if h["close"] is None else f"${h['close']:,.2f}",
+                       "close date": h["close_date"] or "—",
+                       "value": "Data unavailable" if h["value"] is None else f"${h['value']:,.2f}",
+                       "cost basis": "—" if h["cost_basis"] is None else f"${h['cost_basis']:,.2f}",
+                       "flags": "; ".join(h["flags"]) or "—"} for h in v["holdings"]], hide_index=True, width="stretch")
+    else:
+        st.write("No holdings.")
+    pending = pf.pending_orders(conn)
+    if pending:
+        st.markdown("#### Waiting orders (fill at the next close after you placed them)")
+        st.dataframe([{"order": o["order_id"], "side": o["side"], "ticker": o["ticker"], "quantity": o["quantity"],
+                       "placed": format_new_york(o["decided_at"])} for o in pending], hide_index=True, width="stretch")
+
+    if hist:
+        st.markdown(f"#### Return on contributions: paper portfolio vs {bm} mirror (same money, same timing, price-only)")
+        pct = lambda x: None if x is None else round(x * 100, 3)
+        chart = [{"date": h["date"], "Paper portfolio": pct(h["portfolio_return"]),
+                  f"{bm} mirror": pct(h["spy_return"])} for h in hist]
+        st.line_chart(chart, x="date", y=["Paper portfolio", f"{bm} mirror"], color=["#2a78d6", "#eb6834"],
+                      y_label="Return (%)")
+        st.caption("Gaps in the portfolio line mean a holding had no price that day (unknown, not zero).")
+        with st.expander("Table view"):
+            st.dataframe(hist, hide_index=True, width="stretch")
+
+    c1, c2 = st.columns(2)
+    with c1.form("cash", clear_on_submit=True):
+        st.markdown("**Add or withdraw paper cash**")
+        kind = st.radio("Type", ["deposit", "withdrawal"], horizontal=True)
+        amount = st.number_input("Amount (USD)", min_value=0.0, step=100.0)
+        if st.form_submit_button("Save") and amount > 0:
+            try:
+                pf.cash_movement(conn, kind, amount)
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+    with c2.form("order", clear_on_submit=True):
+        st.markdown("**Place a paper order**")
+        side = st.radio("Side", ["buy", "sell"], horizontal=True)
+        ticker = st.text_input("Ticker")
+        qty = st.number_input("Shares", min_value=0.0, step=1.0)
+        briefs = conn.execute("SELECT entry_id, title FROM journal_entries WHERE entry_type='research_brief' "
+                              "ORDER BY entry_seq DESC LIMIT 30").fetchall()
+        link = st.selectbox("Link to a research brief (optional)", ["(none)"] + [f"{b['entry_id']} · {b['title']}"
+                                                                                for b in briefs])
+        note = st.text_input("Why? (saved in the journal)")
+        if st.form_submit_button("Place order") and ticker.strip() and qty > 0:
+            try:
+                oid = pf.place_order(conn, settings, side, ticker, qty, note or None,
+                                     None if link == "(none)" else link.split(" · ")[0])
+                st.success(f"Order {oid} placed. It fills at the close of the first trading day that ends after now.")
+            except ValueError as exc:
+                st.error(str(exc))
+
+    with st.expander("Record a dividend or split (with its source)"):
+        with st.form("action", clear_on_submit=True):
+            kind = st.radio("Kind", ["dividend", "split"], horizontal=True)
+            t = st.text_input("Ticker ")
+            ex = st.date_input("Ex-date")
+            val = st.number_input("Dividend per share (USD) or split ratio (e.g. 2 for 2-for-1)", min_value=0.0)
+            src = st.text_input("Source (e.g. company press release link)")
+            if st.form_submit_button("Save") and t.strip() and val > 0 and src.strip():
+                pf.record_corporate_action(conn, kind, t, ex.isoformat(), val, src)
+                st.rerun()
+
+    st.markdown("#### What happened after each research candidate (hypothetical, not trades)")
+    out = pf.candidate_outcomes(conn, settings)
+    if out:
+        st.dataframe([{"brief date": o["brief_date"], "ticker": o["ticker"], "check": o["check"],
+                       "from": o.get("from", "—"), "to": o.get("to", "—"),
+                       "candidate": "—" if o.get("return") is None else f"{o['return']:+.2%}",
+                       bm: "—" if o.get("spy_return") is None else f"{o['spy_return']:+.2%}",
+                       "status": o["status"]} for o in out], hide_index=True, width="stretch")
+        st.caption("From the close on the brief's date to the latest close; price-only. Past moves say nothing "
+                   "certain about the future.")
+    else:
+        st.write("No research candidates yet.")
+
+    with st.expander("Assumptions (read these)"):
+        c = settings.raw["portfolio"]
+        st.markdown(f"""
+- **Fill price:** the close of the first trading day that ends after you place the order, {c['slippage_bps']} bps
+  worse (buys pay more, sells receive less), fee ${c['fee_per_trade_usd']:.2f} per trade. Only closes we had
+  actually downloaded are used; nothing is back-dated.
+- **No price for {c['unfilled_after_trading_days']} trading days:** the order is rejected.
+- **Limits:** at most {c['max_holdings']} holdings, no margin, no short selling.
+- **Dividends and splits:** only what you record (with a source). Big one-day moves are flagged as possible splits.
+- **{bm} comparison:** every deposit and withdrawal is mirrored into {bm} at the same fill rule. Both sides are
+  price-only (dividends excluded) so the comparison is like-for-like.
+""".replace("$", "\\$"))
 
 
 def page_journal(conn, settings) -> None:
@@ -319,10 +537,31 @@ def page_journal(conn, settings) -> None:
 
 
 def page_health(conn, settings) -> None:
-    st.header("Source health, spending & runs")
+    from ..daily import latest_daily_status
+    from ..maintenance import backup_database, doctor
+
+    st.header("Health: sources, schedule, spending, backups")
     st.write(f"**Mode:** {settings.mode.upper()} · **Database:** `{settings.db_path}`")
     last = store.last_successful_run(conn)
     st.write(f"**Last successful run:** {format_new_york(last['finished_at']) if last else 'none yet'}")
+    daily = latest_daily_status(conn)
+    if daily:
+        st.write(f"**Latest daily result:** {esc(daily['title'])} for {daily['trading_date']}, available "
+                 f"{format_new_york(daily['available_at'])}" + (" — **LATE**" if daily.get("late") else ""))
+    missed = conn.execute("SELECT title FROM journal_entries WHERE dedupe_key LIKE 'missed-%' "
+                          "ORDER BY entry_seq DESC LIMIT 5").fetchall()
+    for m in missed:
+        st.warning(esc(m["title"]))
+    sched = settings.raw["schedule"]
+    st.caption(f"Schedule: research window opens {sched['window_start']}, target {sched['deadline']} New York time, "
+               "weekdays except NYSE holidays. The computer must be on (and awake) for it to run; missed days are "
+               "recorded, never back-filled.")
+
+    st.markdown("#### Setup check (doctor)")
+    st.dataframe([{"status": r[0], "check": r[1], "detail": r[2]} for r in doctor(settings)],
+                 hide_index=True, width="stretch")
+    if not settings.is_demo and st.button("Back up the database now"):
+        st.success(f"Backup saved: {backup_database(settings)}")
 
     st.markdown("#### Spending")
     b = budget_summary(settings)
@@ -358,6 +597,7 @@ def page_health(conn, settings) -> None:
 PAGES = {
     "Today": page_today,
     "Watchlist & screening": page_watchlist,
+    "Review a brief": page_review,
     "Evidence & history": page_evidence,
     "Paper portfolio": page_portfolio,
     "Journal": page_journal,

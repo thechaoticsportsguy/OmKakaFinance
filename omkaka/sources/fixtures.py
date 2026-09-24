@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from ..config import PROJECT_ROOT
+from ..market_calendar import is_trading_day
 from .http import TransportResponse
 
 SPEC_FILE = PROJECT_ROOT / "fixtures" / "demo" / "phase2_market.json"
@@ -87,12 +88,12 @@ class FixtureTransport:
 
     def _index(self, ymd):
         day = datetime.strptime(ymd, "%Y%m%d").date()
-        if day == self.holiday or day.weekday() >= 5:
+        if day == self.holiday or not is_trading_day(day):
             return TransportResponse(404, "no index (fixture)")
         lines = ["Description:           Daily Index of EDGAR Dissemination Feed by Form Type (FICTIONAL)", "",
                  "Form Type   Company Name                                                  CIK         Date Filed  File Name",
                  "-" * 130]
-        if day == self.days[-1]:
+        if day == max(d for d in self.days if is_trading_day(d) and d != self.holiday):
             for c in self.companies:
                 for _ in range(c.get("eightk_count", 0)):
                     lines.append(f"{'8-K':<12}{c['name'][:60]:<62}{c['cik']:<12}{ymd:<12}edgar/data/{c['cik']}/demo.txt")
@@ -155,7 +156,7 @@ class FixtureTransport:
         day = date.fromisoformat(iso)
         if day == self.holiday:
             return self._json({"status": "OK", "queryCount": 0, "resultsCount": 0, "adjusted": False})
-        trading = [d for d in self.days if d != self.holiday]
+        trading = [d for d in self.days if d != self.holiday and is_trading_day(d)]
         if day not in trading:
             return self._json({"status": "OK", "resultsCount": 0})
         i, n = trading.index(day), len(trading)
@@ -167,6 +168,9 @@ class FixtureTransport:
             vol = c["volume"] * (c["last_day_volume_x"] if i == n - 1 else 1)
             results.append({"T": c["ticker"], "o": close, "h": close, "l": close, "c": close, "v": vol, "vw": close,
                             "t": int(datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000)})
+        for bm in self.spec.get("benchmarks", []):
+            close = round(bm["price"] * (1 + bm["trend"] * (i / (n - 1) - 1)), 4)
+            results.append({"T": bm["ticker"], "o": close, "h": close, "l": close, "c": close, "v": bm["volume"]})
         return self._json({"status": "OK", "resultsCount": len(results), "adjusted": False, "results": results})
 
     # ---------------------------------------------------------------- Finnhub

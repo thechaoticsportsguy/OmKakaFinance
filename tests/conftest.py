@@ -7,6 +7,12 @@ from omkaka import db, store
 T0 = datetime(2026, 9, 24, 9, 0, tzinfo=timezone.utc)  # fixed "now" for predictable tests
 
 
+@pytest.fixture(autouse=True)
+def isolated_data_dir(tmp_path, monkeypatch):
+    """Every test uses its own temporary database folder, never the real data/ folder."""
+    monkeypatch.setenv("OMKAKA_DB_PATH", str(tmp_path / "live.db"))
+
+
 @pytest.fixture
 def live_conn(tmp_path):
     path = tmp_path / "live.db"

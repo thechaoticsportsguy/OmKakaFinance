@@ -41,12 +41,22 @@ recommendation. Follow these rules:
 6. Several articles repeating one story are **one** source, not independent confirmation (see "story" groups).
 7. Choosing **"no qualifying candidate"** is a valid and often correct answer.
 
-### Please produce
-- Either ONE research candidate or "No qualifying candidate", with the reason.
-- For a candidate: why it deserves attention today, the catalyst and time horizon (only if supported), bull case,
-  strongest bear case, financial / dilution / liquidity / event risks, a news and filing timeline,
-  missing or stale information, what would invalidate the thesis, and a short checklist for my own research
-  (including what to look at on Finviz and in the SEC filings).
+### Please produce (in this exact format, so the app can check it)
+```
+CANDIDATE: <TICKER>        (or CANDIDATE: NONE)
+RUN: {run_id}
+## Why it deserves attention today
+- [CONFIRMED] <claim> [ev: <evidence id>] [m: <metric id>]
+- [THIRD_PARTY] <claim> [ev: <evidence id>]
+- [AI_ESTIMATE] <interpretation; any number must show its calculation, e.g. (48.2 / 41.0 - 1 = 0.176)> [m: <id>]
+## Catalyst and time horizon    ## Bull case    ## Strongest bear case
+## Risks (financial, dilution, liquidity, event)    ## News and filing timeline
+## Missing or stale information    ## What would invalidate this
+## My research checklist
+- [ ] <item>
+```
+Only shortlisted companies whose outcome is "Passed screening" can be the candidate. Put every number in a
+labeled line with its citation. Then paste the result into the app (Review page, or `python -m omkaka review`).
 """
 
 
@@ -109,7 +119,7 @@ def build_packet(conn, settings, run_id: str | None = None) -> tuple[str, dict]:
           f"- Decision cutoff: {format_new_york(run['decision_cutoff_at'])} (only evidence available by then is included)",
           f"- Packet includes {len(results)} shortlisted/watchlist companies and {len(usable)} evidence items.",
           "- Research tool only: no broker connection, no orders. Scores are prioritization, NOT probabilities.", "",
-          REVIEW_INSTRUCTIONS, "## Market screen summary", ""]
+          REVIEW_INSTRUCTIONS.replace("{run_id}", rid), "## Market screen summary", ""]
     for r in pre:
         L.append(f"- {r['outcome']}: {r['n']}")
     s = settings.raw["screening"]

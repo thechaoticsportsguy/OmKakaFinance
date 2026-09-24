@@ -28,13 +28,14 @@ def test_live_today_page_empty_state(tmp_path, monkeypatch):
     assert any("No research result yet" in w.value for w in at.warning)
 
 
-def test_demo_today_shows_unavailable_reddit_and_correction(demo_settings, monkeypatch):
+def test_demo_today_shows_checked_daily_result(demo_settings, monkeypatch):
     demo.reset_demo_db(demo_settings)
     monkeypatch.setenv("OMKAKA_MODE", "demo")
     at = AppTest.from_file(APP, default_timeout=30).run()
-    text = " ".join(str(m.value) for m in at.markdown) + " ".join(w.value for w in at.warning)
-    assert "Correction" in text
-    assert "Data unavailable" in text
+    text = " ".join(str(m.value) for m in at.markdown)
+    assert "Research candidate: DEMOA" in text and "PASSED" in text
+    assert "not neutral" in text  # Reddit shown as unknown, never neutral
+    assert "[CONFIRMED]" in text and "RISK:" in text
 
 
 def test_demo_screening_page_builds_packet(demo_settings, monkeypatch):

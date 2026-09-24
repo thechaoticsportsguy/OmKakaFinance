@@ -19,7 +19,7 @@ from typing import Iterator
 from .models import METRIC_ALLOWED_STATUSES, REASON_REQUIRED, Status
 from .timeutil import to_utc_iso, utc_now
 
-SCHEMA_VERSION = 2  # latest; see MIGRATIONS below
+SCHEMA_VERSION = 3  # latest; see MIGRATIONS below
 
 # SQLite GLOB pattern for our one allowed time format (UTC, microseconds).
 _TS = "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'"
@@ -253,6 +253,60 @@ BEGIN SELECT RAISE(ABORT, 'append-only table {t}: updates are not allowed'); END
 CREATE TRIGGER IF NOT EXISTS {t}_no_delete BEFORE DELETE ON {t}
 BEGIN SELECT RAISE(ABORT, 'append-only table {t}: deletes are not allowed'); END;"""
         for t in ("market_bars", "screening_results", "watchlist_events")
+    )),
+    (3, f"""
+-- Phase 5: paper portfolio. All append-only; nothing is ever edited.
+CREATE TABLE IF NOT EXISTS paper_cash (
+    cash_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL CHECK (kind IN ('deposit', 'withdrawal')),
+    amount     REAL NOT NULL CHECK (amount > 0),
+    decided_at TEXT NOT NULL {_ts('decided_at')},
+    note       TEXT,
+    fetched_at TEXT NOT NULL {_ts('fetched_at')}
+);
+CREATE TABLE IF NOT EXISTS paper_orders (
+    order_id        TEXT PRIMARY KEY,
+    side            TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+    ticker          TEXT NOT NULL,
+    quantity        REAL NOT NULL CHECK (quantity > 0),
+    decided_at      TEXT NOT NULL {_ts('decided_at')},
+    note            TEXT,
+    linked_entry_id TEXT REFERENCES journal_entries(entry_id),
+    fetched_at      TEXT NOT NULL {_ts('fetched_at')}
+);
+CREATE TABLE IF NOT EXISTS paper_fills (
+    fill_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id     TEXT NOT NULL UNIQUE REFERENCES paper_orders(order_id),
+    status       TEXT NOT NULL CHECK (status IN ('filled', 'rejected')),
+    price        REAL,                 -- close adjusted for slippage
+    close_price  REAL,
+    price_date   TEXT,                 -- trading date of the close used
+    price_effective_at TEXT {_ts('price_effective_at', True)},
+    slippage_bps REAL,
+    fee          REAL,
+    cash_change  REAL,
+    reason       TEXT,
+    fetched_at   TEXT NOT NULL {_ts('fetched_at')},
+    CHECK ((status = 'filled' AND price IS NOT NULL AND price_date IS NOT NULL)
+        OR (status = 'rejected' AND price IS NULL AND length(trim(coalesce(reason, ''))) > 0))
+);
+CREATE TABLE IF NOT EXISTS paper_corporate_actions (
+    action_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind             TEXT NOT NULL CHECK (kind IN ('dividend', 'split')),
+    ticker           TEXT NOT NULL,
+    ex_date          TEXT NOT NULL,
+    amount_per_share REAL,
+    split_ratio      REAL,
+    source_note      TEXT NOT NULL CHECK (length(trim(source_note)) > 0),
+    fetched_at       TEXT NOT NULL {_ts('fetched_at')},
+    CHECK ((kind = 'dividend' AND amount_per_share > 0) OR (kind = 'split' AND split_ratio > 0))
+);
+""" + "\n".join(
+        f"""CREATE TRIGGER IF NOT EXISTS {t}_no_update BEFORE UPDATE ON {t}
+BEGIN SELECT RAISE(ABORT, 'append-only table {t}: updates are not allowed'); END;
+CREATE TRIGGER IF NOT EXISTS {t}_no_delete BEFORE DELETE ON {t}
+BEGIN SELECT RAISE(ABORT, 'append-only table {t}: deletes are not allowed'); END;"""
+        for t in ("paper_cash", "paper_orders", "paper_fills", "paper_corporate_actions")
     )),
 ]
 

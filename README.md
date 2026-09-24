@@ -1,23 +1,26 @@
 # OmKakaFinance
 
-A **local stock-research assistant** that runs on your own computer and opens in your browser.
+A **local stock-research assistant** that runs on your own Windows computer and opens in your browser.
+Every trading morning it screens US stocks (focused on overlooked small and mid caps), gathers filings, news
+and prices from **free** sources, and gives you **one research candidate, or "No qualifying candidate"**,
+with every number sourced, checked, and recorded in a permanent journal.
 
 > **Research tool only.** No broker connection, no real-money orders, no automatic trading.
-> It never promises winning stocks. Scores (later phases) are for prioritizing, not win odds.
+> It never promises winning stocks. Scores are for deciding what to read first, **not** probabilities.
 
-**Spending plan: $0 additional.** Only free data sources; no paid subscriptions; no paid AI API calls.
-The app gathers, screens, and organizes evidence into a **research packet** that you review yourself or with
-your existing Claude access.
+**Spending plan: $0 additional.** Free data sources only; no paid subscriptions; no paid AI calls.
+The app does the gathering, screening, checking and record-keeping. The *interpretation* is yours: read the
+brief and research packet, or have your existing Claude review them (see [Using Claude](#using-your-claude-at-0)).
 
-**Current status: Phase 2 (free data sources, screening, research packet) complete.**
-Phases 3–6 are listed under [Roadmap](#roadmap).
+**Status: all six phases built.** 164 automated checks pass offline. Live data connections have **not** been
+tested against the real services yet (see [What is not verified](#what-is-not-verified-yet)).
 
 ---
 
-## Windows setup (one time)
+## 1. One-time setup (Windows)
 
-1. Install **Python 3.11 or newer** from <https://www.python.org/downloads/windows/>.
-   During install, tick **"Add python.exe to PATH"**.
+1. Install **Python 3.11 or newer** from <https://www.python.org/downloads/windows/> and tick
+   **"Add python.exe to PATH"** during install.
 2. Install **Git** from <https://git-scm.com/download/win>.
 3. Open **PowerShell** (Start menu → type "PowerShell") and run:
 
@@ -29,105 +32,203 @@ py -3 --version
 py -3 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 .venv\Scripts\python.exe -m omkaka init
+.venv\Scripts\python.exe -m pytest
 ```
 
-(`py -3 --version` must print 3.11 or higher.) Instead of the last three lines you can double-click `setup_windows.bat`.
+`py -3 --version` must print 3.11 or higher; the last line should end with "passed".
+(Double-clicking `setup_windows.bat` does the venv/install/init steps for you.)
 
-## Everyday commands (PowerShell, inside the OmKakaFinance folder)
+**Already installed an earlier phase?** Update with `git pull` then
+`.venv\Scripts\python.exe -m pip install -r requirements.txt`. Your database upgrades itself automatically and
+keeps all history.
 
-| What | Command | Or double-click |
-|---|---|---|
-| Offline demo (fictional data) | `.venv\Scripts\python.exe -m omkaka demo` | `start_demo.bat` |
-| Live dashboard | `.venv\Scripts\python.exe -m omkaka app` | `start_app.bat` |
-| Rebuild the demo from scratch | `.venv\Scripts\python.exe -m omkaka demo-reset` | |
-| Run automated checks | `.venv\Scripts\python.exe -m pytest` | `run_checks.bat` |
-| Check the journal was not tampered with | `.venv\Scripts\python.exe -m omkaka verify` | |
-| Show settings & which secrets are set | `.venv\Scripts\python.exe -m omkaka status` | |
-| Test each free data source once | `.venv\Scripts\python.exe -m omkaka sources-check` | |
-| Run a full screen (several minutes) | `.venv\Scripts\python.exe -m omkaka screen` | |
-| Write the research packet | `.venv\Scripts\python.exe -m omkaka packet` | |
-| Watchlist | `.venv\Scripts\python.exe -m omkaka watch add TICKER` / `watch remove TICKER` / `watch list` | |
-
-The dashboard opens at <http://localhost:8501>. Stop it with **Ctrl+C** in the PowerShell window.
-It listens only on your own computer (`localhost`).
-
-## Secrets (API keys)
-
-Never paste keys into chat, screenshots, or commits. When a later phase needs one:
-
+### Try the offline demo first
 ```powershell
-copy .env.example .env
-notepad .env
+.venv\Scripts\python.exe -m omkaka demo
 ```
+Opens <http://localhost:8501> with **fictional** companies (DEMOX, DEMOA, …) and a red DEMO banner on every page.
+Press **Ctrl+C** in PowerShell to stop.
 
-Fill in the value after the `=`, save, and close. `.env` is ignored by git. The dashboard only ever shows
-"set" / "not set".
-
-## Free data sources (set up once)
+## 2. Free data sources and keys
 
 | Source | What it gives | Cost / limit | Setting in `.env` |
 |---|---|---|---|
 | SEC EDGAR | Listed companies, share counts, filings (8-K announcements, 10-Q, S-3…), reported financials | Free, no key; max 10 requests/second | `SEC_USER_AGENT` = your name + email |
-| Massive (formerly Polygon.io) "Stocks Basic" | End-of-day prices and volume for every US stock | Free; 5 calls/minute; personal use | `MARKET_DATA_API_KEY` |
+| Massive (formerly Polygon.io) "Stocks Basic" | End-of-day prices for every US stock (and SPY) | Free; 5 calls/minute; personal use | `MARKET_DATA_API_KEY` |
 | Finnhub | Company news headlines and summaries | Free; ~60 calls/minute; personal use | `NEWS_API_KEY` |
 | Reddit (official API only) | Post links, counts, timestamps | Free, but Reddit must **approve** your access first | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USER_AGENT` |
 
-The app waits between calls to stay under each limit. The first screen downloads about 25 days of prices at
-12 seconds per call (about 5 minutes); later runs only fetch new days.
+Sign up for the free Massive and Finnhub plans, then:
+```powershell
+copy .env.example .env
+notepad .env
+```
+Fill in values after the `=`, save, close. **Never paste keys into chat, screenshots, or commits.** `.env` is
+ignored by git; the app only ever shows "set" / "not set". Then test each source once:
+```powershell
+.venv\Scripts\python.exe -m omkaka sources-check
+```
+Until Reddit approves you, Reddit shows as "Data unavailable … UNKNOWN, not neutral". That is expected.
 
-## How a screening run works
+## 3. Turn on the 6 a.m. schedule
 
-1. **Whole market (cheap):** every NYSE/Nasdaq company is checked for price ≥ $2, market cap $100M–$5B,
-   average daily dollar volume ≥ $1M, and enough recent price history. Change these in `config/settings.toml`.
+```powershell
+.venv\Scripts\python.exe -m omkaka schedule install
+.venv\Scripts\python.exe -m omkaka daily
+```
+(or double-click `install_schedule.bat`). The second line runs the daily job once right now so you can see it work.
+
+How it behaves:
+- Windows runs `run_daily.bat` **every 30 minutes**. Each time, the job checks **New York time** itself (daylight
+  saving handled; your PC's timezone doesn't matter) and usually does nothing:
+  - **weekends and NYSE holidays** → nothing (no brief that day);
+  - **before 4:30 a.m. New York** → nothing (too early);
+  - **today's result already recorded** → nothing (no duplicates);
+  - otherwise it screens, picks one candidate or none, checks the brief, writes the packet, and journals it.
+- Target: ready by **6:00 a.m.** Anything finished later is labeled **LATE** with its real time.
+- **Your computer must be on and awake.** If it was off, the run happens as soon as it's back (the same day), and
+  trading days that were missed entirely are recorded as **"Missed run"**. They are never back-filled with later data.
+- If sources fail, it retries on the next triggers (up to 3 attempts, before 6:00), then records
+  "No qualifying candidate: research unavailable" with the reason.
+- The task does **not** wake a sleeping PC by default (it would wake it every 30 minutes). If you want that:
+  `python -m omkaka schedule install --wake`. Remove the task with `python -m omkaka schedule uninstall`.
+- Log file: `data\logs\daily.log`.
+- Unscheduled market closures can't be predicted: add them to `extra_closed_dates` in `config/settings.toml`.
+
+## 4. Daily use
+
+1. Open the dashboard: `.venv\Scripts\python.exe -m omkaka app` (or `start_app.bat`).
+2. **Today**: the candidate (or "No qualifying candidate"), its check result (PASSED / FLAGGED), source coverage,
+   and the brief. Red **STALE** means there is no result yet for today; **LATE** means it arrived after 6:00.
+3. **Watchlist & screening**: the shortlist, score components, risk flags, why others were excluded, your
+   watchlist, and the research-packet download.
+4. **Review a brief**: paste your own or Claude's brief; the app checks it (details below) and saves it.
+5. **Paper portfolio**: paper cash, orders, holdings, and your return vs SPY.
+6. **Journal**: the permanent record, integrity check, notes and corrections.
+7. **Health**: the setup check, schedule status, missed runs, sources, $0 spending, backups.
+
+### How the candidate is chosen (no AI)
+1. **Whole market:** NYSE/Nasdaq companies with price ≥ $2, market cap $100M–$5B, average daily dollar
+   volume ≥ $1M, and fresh price history. Missing data means **insufficient data**, never a pass.
 2. **Prioritization score (0–100):** volume spike, 20-day momentum, recent 8-K filings, smaller size.
-   Every component is shown. It is **not** a probability. Reddit never adds points.
-3. **Shortlist (top 15 + your watchlist):** filings, reported financials, news, and Reddit are collected, and
-   **risk flags** are raised (dilution filings, share-count growth, negative cash flow, thin liquidity,
-   unexplained price spikes, possible promotion).
-4. A company whose SEC filings could not be retrieved is **withheld** ("insufficient data"), even with a high score.
-5. **Research packet:** `python -m omkaka packet` (or the button on the Screening page) writes
-   `data\packets\packet-<run>.md`. Read it, or attach it to your existing Claude (e.g. open this folder in
-   Claude Code and ask "review the latest research packet"). The packet includes the review rules.
+   Every component is shown. Reddit never adds points.
+3. **Shortlist (top 15 + your watchlist):** filings, financials, news, Reddit; **risk flags** raised for
+   dilution filings, share-count growth, cash burn, thin liquidity, unexplained spikes, promotion signs.
+4. **Selection gates** (all must pass): passed screening, score ≥ 35, SEC filings **and** SEC financial data
+   retrieved, no blocking flag (late filing, filings unavailable, promotion signs), and an identifiable recent
+   catalyst (8-K or news). Highest score among those that pass wins; if none pass → **No qualifying candidate**.
+5. **Automatic data-only brief:** every line cites its metric or evidence ID and is checked before publishing.
+   It deliberately does **not** write a narrative, price target, or time horizon.
 
-## Budget
+All thresholds live in `config/settings.toml` with plain-English comments.
 
-`config/settings.toml` sets a **$0 ceiling** (no paid data, no paid AI API calls). Every provider is marked
-`paid = false`; any provider marked paid, or unknown, is refused by the app before a request is sent.
+### Using your Claude at $0
+- Download the **research packet** (Screening page, or `python -m omkaka packet` → `data\packets\`). It contains
+  review rules, source coverage, every number with its source and time, and fenced evidence text.
+- Attach it to your Claude, or open this folder in **Claude Code** and say *"review the latest research packet"*
+  (`CLAUDE.md` tells Claude Code the rules).
+- Paste Claude's answer into **Review a brief** (or `python -m omkaka review brief.md`). The app checks:
+  - every number matches the **cited** metric for the **right company, metric and period** (or appears in the
+    cited evidence text), and names the problem when it doesn't ("wrong company", "wrong period", "not cited");
+  - every evidence/metric ID exists and was available **before the run's cutoff**;
+  - labels: `CONFIRMED` needs a primary source (SEC filing/reported number); `THIRD_PARTY` needs a citation;
+    `AI_ESTIMATE` may not introduce new numbers except a shown, re-computed calculation;
+  - no price targets, probabilities, or promises; the candidate must have passed the gates;
+  - instruction-like text and links not from the packet are flagged.
+  Result: **passed**, **flagged** (usable, read warnings), or **rejected** (saved only as a rejected note).
 
-## Roadmap
+### Paper portfolio rules
+- Orders only when **you** place them (the daily candidate is never bought automatically).
+- Fill = the **close of the first trading day that ends after you placed the order**, 0.10% worse (slippage),
+  using only prices the app had actually downloaded. No back-dated fills. No price for 5 trading days → rejected.
+- Max 15 holdings; no margin; no short selling.
+- Dividends/splits: record them yourself with a source note; big one-day drops are flagged as possible splits.
+- **SPY comparison:** every deposit/withdrawal is mirrored into SPY with the same fill rule; both are price-only.
+- "What happened after each candidate" tracks every published candidate vs SPY (hypothetical, not trades).
+- Commands: `python -m omkaka paper deposit 10000`, `paper buy TICKER 10 --brief ENTRY_ID`, `paper sell TICKER 5`,
+  `paper status`, `paper dividend TICKER 2026-10-01 0.25 "source"`, `paper split TICKER 2026-10-01 2 "source"`.
 
-| Phase | What | Needs money? |
-|---|---|---|
-| 1 ✅ | Foundation, append-only journal, dashboard, offline demo | No |
-| 2 ✅ | Free data sources, screening, risk flags, research packet | No |
-| 3 | **Review loop:** paste a brief (yours or Claude's) back into the app; it checks every number against the right company, metric, period, and source, checks cited evidence IDs exist and were available by the cutoff, and saves it to the journal | No |
-| 4 | **Daily 6 a.m. run** with Windows Task Scheduler: screen + packet ready by 6:00 New York time, deterministic "candidate / no qualifying candidate" gates, missed-run and holiday handling | No |
-| 5 | Paper portfolio (15 holdings) vs SPY, explicit paper trades only | No |
-| 6 | Reliability checks, backups, troubleshooting guide | No |
+## 5. All commands (PowerShell, in the project folder, prefix `.venv\Scripts\python.exe -m omkaka`)
 
-**Not planned under the $0 plan** (each would need a separate paid API or a local model):
-automatic AI research roles (fundamentals / news / sentiment / skeptic / editor) running unattended,
-an AI-written brief ready at 6 a.m. without you, and AI reading of full filing text.
-Options if you ever want them: the Anthropic API (paid, separate from a Claude subscription) or a local
-model (free to run, e.g. Ollama, but needs a capable PC and gives weaker results).
+| Command | What it does |
+|---|---|
+| `app` / `demo` / `demo-reset` | live dashboard / offline demo / rebuild the demo |
+| `sources-check` | one small free test call to each data source |
+| `screen` | run a screening now (several minutes the first time) |
+| `packet [--run RUN]` | write the research packet |
+| `daily` | the daily job (safe any time; does nothing if not due) |
+| `schedule install [--wake]` / `uninstall` / `status` | Windows Task Scheduler |
+| `review FILE [--run RUN]` | check a brief and save it to the journal |
+| `watch add TICKER` / `watch remove TICKER` / `watch list` | watchlist |
+| `paper …` | paper portfolio (see above) |
+| `backup` | safe copy of the database into `data\backups` (newest 30 kept) |
+| `doctor` | check the whole setup and explain problems in plain English |
+| `verify` | journal tamper check |
+| `status` | settings, budget, which keys are set |
 
-## How the data rules are enforced
+Double-click helpers: `setup_windows.bat`, `start_demo.bat`, `start_app.bat`, `install_schedule.bat`,
+`run_checks.bat` (tests + doctor + journal check).
+
+## 6. Backups and restore
+
+- Automatic: after every successful daily run (kept in `data\backups`, newest 30).
+- Manual: `python -m omkaka backup`, or the button on the Health page.
+- Off-computer copy (recommended weekly): copy the `data\backups` folder to a USB drive or cloud folder.
+- **Restore:** close the app and scheduled runs (`schedule uninstall`), rename `data\omkaka.db` to
+  `data\omkaka-broken.db`, copy the backup file to `data\omkaka.db`, run `python -m omkaka doctor`, then
+  `schedule install` again.
+
+## 7. How the data rules are enforced
 
 | Rule | How |
 |---|---|
-| Missing data is never zero or neutral | Every result has a status (OK, no results, partial, failed, rate-limited, no coverage, no access, not configured). The database refuses to store a number for a failed item, or to store an OK item with no number. Unavailable items show **"Data unavailable — reason"**. |
-| "Searched, found nothing" ≠ "search failed" | Separate statuses: `NO_RESULTS` vs `FAILED`/`RATE_LIMITED`/… |
-| Stale vs fresh | Each number is judged by its market-data time or publication time against `[staleness_hours]` in settings. |
-| Times | Every record has `fetched_at` (UTC). Where applicable also `published_at` (when the source published it) and `effective_at` (the market-data "as of" time). The database rejects non-UTC times. |
-| Numbers keep their context | Each stored number records company (ticker/CIK), metric, period, unit, kind (reported / guidance / third-party forecast / market data / calculated), provider, source URL and ID. Calculated numbers store their inputs and formula. |
-| What was known when | Each run has a **decision cutoff**; research reads only evidence fetched **and** published by then. |
-| Append-only history | The database blocks edits and deletes of evidence, numbers, source checks and journal entries. Corrections are new entries pointing at the original. A hash chain detects tampering done outside the app. |
-| Demo never mixes with live | Separate database files, each permanently stamped `demo` or `live`. Opening or seeding the wrong one is refused. Demo companies (DEMOX, DEMOY) are fictional, and links go to example.com. |
+| Missing data is never zero or neutral | Every result has a status (OK, no results, partial, failed, rate-limited, no coverage, no access, not configured). The database refuses a number for a failed item. Screens show **"Data unavailable — reason"**. |
+| "Found nothing" ≠ "failed" | Separate statuses; a holiday with no trading is "no results", a 429 is "rate limited". |
+| Stale vs fresh | Prices must be from the latest trading day (NYSE calendar) or the screen stops; displayed numbers show fresh/STALE. |
+| Times | Every record has `fetched_at` (UTC); plus `published_at` and market `effective_at` where applicable. Non-UTC times are rejected by the database. |
+| Numbers keep their context | Company (ticker + CIK), metric, period, unit, kind (reported / guidance / forecast / market / calculated), source URL and ID. Calculations store inputs and formula. |
+| What was known when | Each run has a decision cutoff; research, briefs and packets use only evidence fetched **and** published by then. |
+| Append-only history | Evidence, numbers, source checks, screening results, journal, watchlist and paper trades cannot be edited or deleted. Corrections are new entries. A hash chain detects outside tampering (`verify`, `doctor`). |
+| No unverified claims | Briefs are checked against the evidence before they are published or saved as accepted. |
+| External text is data | Stored as quoted evidence only; fenced in packets; never executed or obeyed. |
+| Demo never mixes with live | Separate database files stamped `demo`/`live`; fictional companies; all demo links go to example.com. |
+| $0 spending | Every provider is `paid = false`; paid or unknown providers are refused before any request. |
 
-## Backups
+## 8. What is not verified yet
 
-Your research history lives in `data\omkaka.db`. To back it up, close the app and copy that file somewhere
-safe (e.g. `copy data\omkaka.db D:\Backups\omkaka-2026-09-24.db`).
+- **No live call to any real data source has been made during development** (the build environment's network
+  blocked them). Everything was tested against realistic offline fixtures. Run `sources-check`, then `daily`,
+  and check `doctor` and the Health page. If a source's format differs from its documentation, the app shows
+  that source as failed/unavailable rather than inventing data.
+- The **Windows Task Scheduler** setup and the `.bat` files were written for Windows but could not be run here.
+  Check with `python -m omkaka schedule status` and `data\logs\daily.log`.
+- Massive's free-plan terms were confirmed only through search results; confirm on massive.com when signing up.
+- SEC's bulk share-count data can miss companies with several share classes; they show as "insufficient data".
+- Reddit access depends on Reddit's manual approval.
+
+## 9. Not included under the $0 plan
+
+Automatic AI research agents (fundamentals / news / sentiment / skeptic / editor) running unattended, an
+AI-written narrative brief waiting at 6 a.m. without you, and AI reading of full filing text. Each would need a
+paid API (the Anthropic API is billed separately from a Claude subscription) or a local model (free to run, e.g.
+Ollama, but needs a capable PC and gives weaker results). The review loop in section 4 is the $0 substitute.
+
+## 10. Troubleshooting
+
+Start with `python -m omkaka doctor`. It explains most problems.
+
+- **`py` is not recognized**: reinstall Python with "Add python.exe to PATH", or use `python` instead of `py -3`.
+- **Port already in use**: another dashboard is open. Close it (Ctrl+C) and retry.
+- **`sources-check` says NOT_CONFIGURED**: that key is missing from `.env`.
+- **SEC NO_ACCESS (HTTP 403)**: `SEC_USER_AGENT` must contain your name and a real email.
+- **Massive NO_ACCESS**: the free plan may not include that date yet (end-of-day data appears after the close).
+- **RATE_LIMITED**: wait a few minutes; cached data is reused on the next run.
+- **"Latest price data is stale"**: yesterday's prices couldn't be downloaded; the screen refuses to rank on old
+  prices. It retries on the next trigger.
+- **Today page says STALE**: no result yet today: check the Health page (missed runs, last failed run) and
+  `data\logs\daily.log`; run `python -m omkaka daily` by hand to see what happens.
+- **"is a 'demo' database; expected 'live'"**: safety stop; don't rename database files.
+- **Journal integrity PROBLEM**: the database file was edited outside the app. Restore from a backup (section 6).
 
 ## Project layout
 
@@ -137,29 +238,26 @@ omkaka/
   config.py            settings + secrets (values never printed)
   models.py            statuses, claim labels, value kinds
   timeutil.py          UTC storage, New York display
-  db.py                database schema and protections
-  store.py             saving runs, source checks, evidence, numbers; cutoff queries
+  market_calendar.py   NYSE trading days and holidays
+  db.py                database schema, protections, automatic upgrades
+  store.py             runs, source checks, evidence, numbers; cutoff queries; watchlist
   journal.py           append-only, hash-chained journal
   display.py           honest formatting ("Data unavailable — reason", STALE)
-  budget.py            spending gate ($0 plan: refuses paid providers)
-  sources/             free data sources: sec, massive, finnhub, reddit; http layer; offline fixtures
+  budget.py            spending gate ($0 plan)
+  sources/             free data sources (SEC, Massive, Finnhub, Reddit), request layer, offline fixtures
   screening.py         screening rules, scores, risk flags
-  pipeline.py          the screening run
+  pipeline.py          a screening run
+  selection.py         candidate gates and choice
+  brief.py             automatic data-only brief
+  review.py            brief checker (numbers, citations, labels, cutoff)
   packet.py            research packet for your own review
-  demo.py              builds the offline demo database
+  daily.py             the daily job (timing, duplicates, late/missed runs, retries, lock)
+  schedule.py          Windows Task Scheduler setup
+  portfolio.py         paper portfolio, fills, SPY mirror, candidate outcomes
+  maintenance.py       backups and doctor
+  demo.py              builds the offline demo
   ui/pages.py          dashboard pages
-config/settings.toml   thresholds, budget, staleness (no secrets)
-fixtures/demo/         FICTIONAL demo data (Phase 1 brief example + Phase 2 fixture market)
-tests/                 automated checks
+config/settings.toml   every threshold and rule, with comments (no secrets)
+fixtures/demo/         FICTIONAL demo data
+tests/                 automated checks (offline; no paid or live calls)
 ```
-
-## Troubleshooting
-
-- **`py` is not recognized**: reinstall Python and tick "Add python.exe to PATH", or try `python` instead of `py -3`.
-- **Port already in use**: another dashboard window is still open. Close it (Ctrl+C) and retry.
-- **"Demo database not found"**: run `.venv\Scripts\python.exe -m omkaka demo-reset`.
-- **"is a 'demo' database; expected 'live'"**: a safety stop. The demo and live files were mixed up; don't rename database files.
-- **`sources-check` says NOT_CONFIGURED**: that key is missing from `.env`.
-- **SEC shows NO_ACCESS (HTTP 403)**: `SEC_USER_AGENT` must contain your name and a real email.
-- **Massive shows NO_ACCESS**: the free plan may not include that date yet (end-of-day data appears after the close).
-- **RATE_LIMITED**: wait a few minutes and run again; cached data is reused.

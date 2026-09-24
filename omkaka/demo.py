@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import db, journal, store
 from .config import PROJECT_ROOT, Settings
-from .timeutil import utc_now
+from .timeutil import to_utc_iso, utc_now
 
 FIXTURE_FILE = PROJECT_ROOT / "fixtures" / "demo" / "demo_dataset.json"
 DEMO_PROVIDER = "DEMO FIXTURE"
@@ -67,7 +67,34 @@ def seed_demo_screen(conn, settings: Settings, now: datetime | None = None) -> d
         store.watchlist_change(conn, t, "add", note="demo watchlist entry", now=base)
     clients = build_clients(conn, settings, transport=FixtureTransport(base.astimezone(NEW_YORK).date()),
                             sleep=lambda s: None, now=clock, demo_credentials=True)
-    return run_screen(conn, settings, clients, run_kind="demo", run_id="demo-screen-001", log=lambda m: None)
+    summary = run_screen(conn, settings, clients, run_kind="demo", run_id="demo-screen-001", log=lambda m: None)
+    # Publish the day's result exactly as the daily job would (without its time-of-day checks).
+    from .daily import publish_result
+    done = clock()
+    publish_result(conn, settings, "demo-screen-001",
+                   {"trading_date": done.astimezone(NEW_YORK).date().isoformat(), "available_at": to_utc_iso(done),
+                    "late": False, "demo": True}, dedupe_key=None)
+    seed_demo_portfolio(conn, settings, done)
+    return summary
+
+
+def seed_demo_portfolio(conn, settings: Settings, now: datetime) -> None:
+    """A small FICTIONAL paper portfolio so the Portfolio page has something to show."""
+    from . import portfolio as pf
+    from .market_calendar import trading_days_before
+    from .timeutil import NEW_YORK
+
+    if db.db_mode(conn) != "demo":
+        raise NotADemoDatabase("Refusing to create demo paper trades in a non-demo database.")
+    days = trading_days_before(now.astimezone(NEW_YORK).date(), 15)
+    at = lambda d, hh: datetime.combine(d, datetime.min.time(), tzinfo=NEW_YORK).replace(hour=hh)
+    pf.cash_movement(conn, "deposit", 25_000, "DEMO: fictional starting paper cash", now=at(days[0], 9))
+    brief = conn.execute("SELECT entry_id FROM journal_entries WHERE entry_type='research_brief' "
+                         "ORDER BY entry_seq DESC LIMIT 1").fetchone()
+    pf.place_order(conn, settings, "buy", "DEMOX", 600, "DEMO: fictional order", now=at(days[2], 10))
+    pf.place_order(conn, settings, "buy", "DEMOA", 200, "DEMO: fictional order linked to the demo brief",
+                   linked_entry_id=brief["entry_id"] if brief else None, now=at(days[5], 10))
+    pf.fill_pending(conn, settings, now=now)
 
 
 def seed_demo(conn, now: datetime | None = None) -> str:

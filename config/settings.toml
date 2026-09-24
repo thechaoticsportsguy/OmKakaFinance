@@ -108,3 +108,43 @@ smaller_size = 20       # smaller market cap within the range = more overlooked
 dilution_share_growth_pct = 10   # shares outstanding up more than this in ~1 year
 thin_liquidity_multiple = 2      # avg $ volume below 2x the minimum = "thin"
 price_spike_pct = 50             # one-day move this large without a filing = check for promotion
+
+# ------------------------------------------------------------------ daily schedule (Phase 4)
+[schedule]
+# All times are New York time (America/New_York; daylight saving handled).
+# Windows Task Scheduler wakes the job every 30 minutes; the job itself decides
+# whether it is time to work, so your PC's own timezone does not matter.
+window_start = "04:30"          # research may start from this time
+deadline = "06:00"              # brief should be ready by this time; later = marked LATE
+max_attempts_per_day = 3        # failed runs are retried on later triggers, up to this many
+missed_day_lookback = 7         # on start-up, record trading days that had no run
+extra_closed_dates = []         # unscheduled market closures, e.g. ["2026-01-09"]
+
+# ------------------------------------------------------------------ candidate selection (Phase 4)
+[selection]
+# A shortlisted company must pass EVERY gate to be the day's candidate.
+# If none pass, the day's result is "No qualifying candidate".
+min_priority_score = 35
+require_recent_catalyst = true      # a recent 8-K or at least one news story
+# Any flag starting with one of these texts blocks the company:
+blocking_flags = ["FILINGS UNAVAILABLE", "late-filing notice", "possible promotion",
+                  "many Reddit posts from few authors"]
+# Critical evidence: these sources must have worked for the company.
+required_sources = ["SEC filings", "SEC financial data"]
+
+# ------------------------------------------------------------------ benchmark & paper portfolio (Phase 5)
+[benchmark]
+ticker = "SPY"
+
+[portfolio]
+max_holdings = 15
+# Fills: an order is filled at the CLOSE of the first trading day that ends
+# after you placed it (a "market-on-close" assumption). No backdated fills.
+slippage_bps = 10              # 0.10% worse than the close (buys pay more, sells get less)
+fee_per_trade_usd = 0.00
+unfilled_after_trading_days = 5    # no price for this many days -> order rejected
+split_warning_move_pct = 40        # a holding moving this much in one day is flagged as a possible split
+
+# ------------------------------------------------------------------ backups (Phase 6)
+[backup]
+keep_last = 30
