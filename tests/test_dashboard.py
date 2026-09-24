@@ -35,3 +35,15 @@ def test_demo_today_shows_unavailable_reddit_and_correction(demo_settings, monke
     text = " ".join(str(m.value) for m in at.markdown) + " ".join(w.value for w in at.warning)
     assert "Correction" in text
     assert "Data unavailable" in text
+
+
+def test_demo_screening_page_builds_packet(demo_settings, monkeypatch):
+    demo.reset_demo_db(demo_settings)
+    monkeypatch.setenv("OMKAKA_MODE", "demo")
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    at.sidebar.radio[0].set_value("Watchlist & screening").run()
+    assert not at.exception
+    next(b for b in at.button if b.label == "Build research packet").click().run()
+    assert not at.exception
+    assert any("recorded it in the journal" in s.value for s in at.success)
+    assert (demo_settings.db_path.parent / "packets" / "packet-demo-screen-001.md").exists()

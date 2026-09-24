@@ -8,7 +8,8 @@ import streamlit as st
 from .. import db, journal, store
 from ..budget import budget_summary
 from ..config import load_settings, secret_status
-from ..display import coverage_summary, describe_metric, md_escape as esc, staleness_category, status_text
+from ..packet import format_input
+from ..display import coverage_summary, describe_metric, md_escape as esc, reason_category, staleness_category, status_text
 from ..timeutil import format_new_york, parse_utc_iso
 
 LABEL_COLORS = {"CONFIRMED": "green", "THIRD_PARTY": "orange", "AI_ESTIMATE": "violet"}
@@ -44,8 +45,8 @@ def page_today(conn, settings) -> None:
     st.header("Today's candidate")
     entry = _latest_decision(conn)
     if entry is None:
-        st.warning("No research result yet. Research runs arrive in Phase 4. "
-                   "(Try the demo: `python -m omkaka demo`.)")
+        st.warning("No research result yet. For now: run a screen, then build a research packet on the "
+                   "Screening page and review it with your own Claude access. (Try the demo: `python -m omkaka demo`.)")
         return
     payload = json.loads(entry["payload_json"])
     st.caption(f"Written {format_new_york(entry['fetched_at'])} · journal entry {entry['entry_id']}")
@@ -137,15 +138,116 @@ def page_today(conn, settings) -> None:
         st.markdown(f"[Open {payload['ticker']} on Finviz](https://finviz.com/quote.ashx?t={payload['ticker']})")
 
 
+def _screen_runs(conn):
+    return conn.execute(
+        """SELECT r.* FROM runs r WHERE EXISTS (SELECT 1 FROM screening_results s WHERE s.run_id = r.run_id)
+           ORDER BY r.started_at DESC""").fetchall()
+
+
+def _fmt_money(v):
+    return "Data unavailable" if v is None else f"${v / 1e6:,.1f}M"
+
+
 def page_watchlist(conn, settings) -> None:
-    st.header("Watchlist & screening")
-    st.info("Screening arrives in Phase 2. Below: every stored number, including unavailable ones.")
-    rows = conn.execute("SELECT * FROM metric_values ORDER BY ticker, metric").fetchall()
-    if not rows:
-        st.write("No data yet.")
-        return
-    st.dataframe([describe_metric(r, settings.staleness_hours(staleness_category(r))) for r in rows],
-                 hide_index=True, width="stretch")
+    st.header("Screening, shortlist & watchlist")
+    st.caption("Scores are for prioritizing what to read first. They are NOT probabilities of success. "
+               "Reddit/social activity never adds points.")
+    runs = _screen_runs(conn)
+    if not runs:
+        st.warning("No screening run yet. Run `python -m omkaka screen` (free sources; takes several minutes).")
+    else:
+        labels = {f"{r['run_id']} · {format_new_york(r['started_at'])} · {r['status']}": r for r in runs}
+        run = labels[st.selectbox("Screening run", list(labels))]
+        rid = run["run_id"]
+        pre = {r["outcome"]: r["n"] for r in conn.execute(
+            "SELECT outcome, COUNT(*) n FROM screening_results WHERE run_id=? AND stage='prefilter' GROUP BY outcome",
+            (rid,))}
+        cols = st.columns(4)
+        for col, (key, label) in zip(cols, [("passed", "Passed"), ("failed_threshold", "Failed a rule"),
+                                            ("insufficient_data", "Insufficient data"), (None, "Companies screened")]):
+            col.metric(label, sum(pre.values()) if key is None else pre.get(key, 0))
+
+        st.markdown("#### Shortlist (plus your watchlist)")
+        short = conn.execute("SELECT * FROM screening_results WHERE run_id=? AND stage='shortlist' "
+                             "ORDER BY rank IS NULL, rank, ticker", (rid,)).fetchall()
+        outcome_text = {"passed": "passed", "insufficient_data": "WITHHELD: insufficient data",
+                        "watchlist_only": "watchlist only (failed screen)", "failed_threshold": "failed"}
+        st.dataframe([{
+            "rank": r["rank"] or "—", "ticker": r["ticker"], "company": r["company_name"],
+            "outcome": outcome_text[r["outcome"]],
+            "priority score": "—" if r["score"] is None else f"{r['score']:.1f} / 100",
+            "market cap": _fmt_money(json.loads(r["inputs_json"]).get("market_cap")),
+            "avg $ volume/day": _fmt_money(json.loads(r["inputs_json"]).get("avg_dollar_volume")),
+            "risk flags": len(json.loads(r["flags_json"])),
+        } for r in short], hide_index=True, width="stretch")
+
+        for r in short:
+            flags, reasons = json.loads(r["flags_json"]), json.loads(r["reasons_json"])
+            inputs, comps = json.loads(r["inputs_json"]), json.loads(r["components_json"])
+            with st.expander(f"{r['ticker']} — {r['company_name']} · {outcome_text[r['outcome']]}"):
+                for reason in reasons:
+                    st.error(esc(reason))
+                for f in flags:
+                    st.warning(esc(f))
+                if comps:
+                    st.dataframe([{"component": k, "points": v["points"], "max": v["max"],
+                                   "input": format_input(k, v["input"]), "how scored": v["note"]} for k, v in comps.items()],
+                                 hide_index=True, width="stretch")
+                for c in inputs.get("catalyst_8k") or []:
+                    st.write(f"- 8-K filed {c['filed']}: {', '.join(c['items']) or 'items not listed'}")
+                metrics = [m for m in store.metrics_as_of(conn, parse_utc_iso(run["decision_cutoff_at"]),
+                                                          ticker=r["ticker"]) if m["run_id"] == rid]
+                if metrics:
+                    st.dataframe([describe_metric(m, settings.staleness_hours(staleness_category(m)))
+                                  for m in metrics], hide_index=True, width="stretch")
+                ev = [e for e in store.evidence_for_run(conn, rid) if e["ticker"] == r["ticker"]]
+                for e in ev:
+                    st.write(f"- [{esc(e['title'])}]({e['url']}) · {e['source_type']} · published "
+                             f"{format_new_york(e['published_at'])}")
+                checks = conn.execute("SELECT * FROM source_checks WHERE run_id=? AND ticker=?",
+                                      (rid, r["ticker"])).fetchall()
+                st.caption("Coverage: " + " · ".join(
+                    f"{c['source']}: {status_text(c['status'], c['status_reason'])}" for c in checks))
+                if not settings.is_demo:
+                    st.markdown(f"[Finviz](https://finviz.com/quote.ashx?t={r['ticker']})")
+
+        st.markdown("#### Why companies were excluded")
+        reasons = {}
+        for row in conn.execute("SELECT outcome, reasons_json FROM screening_results WHERE run_id=? "
+                                "AND stage='prefilter' AND outcome != 'passed'", (rid,)):
+            for reason in json.loads(row["reasons_json"]):
+                key = (row["outcome"], reason_category(reason))
+                reasons[key] = reasons.get(key, 0) + 1
+        st.dataframe([{"outcome": k[0], "reason": k[1], "companies": n}
+                      for k, n in sorted(reasons.items(), key=lambda kv: -kv[1])], hide_index=True, width="stretch")
+
+        st.markdown("#### Research packet")
+        st.write("A single document with this run's shortlist, numbers, sources, and review instructions. "
+                 "Read it yourself or attach/paste it into your existing Claude. No paid AI calls are made.")
+        if st.button("Build research packet"):
+            from ..packet import write_packet
+            path, meta = write_packet(conn, settings, settings.db_path.parent / "packets", rid)
+            st.session_state["packet"] = (path.name, path.read_text(encoding="utf-8"))
+            st.success(f"Saved {path} and recorded it in the journal.")
+        if "packet" in st.session_state:
+            name, text = st.session_state["packet"]
+            st.download_button("Download packet (.md)", text, file_name=name, mime="text/markdown")
+
+    st.markdown("#### Your watchlist")
+    st.caption("Watchlist companies are researched every run even if they fail the screen.")
+    wl = store.current_watchlist(conn)
+    st.write(", ".join(wl) if wl else "(empty)")
+    with st.form("watch", clear_on_submit=True):
+        c1, c2, c3 = st.columns([2, 3, 1])
+        ticker = c1.text_input("Ticker")
+        note = c2.text_input("Note (optional)")
+        action = c3.radio("Action", ["add", "remove"])
+        if st.form_submit_button("Save") and ticker.strip():
+            try:
+                store.watchlist_change(conn, ticker, action, note or None)
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
 
 
 def page_evidence(conn, settings) -> None:
@@ -166,6 +268,7 @@ def page_evidence(conn, settings) -> None:
             continue
         table.append({
             "evidence_id": e["evidence_id"], "ticker": e["ticker"], "type": e["source_type"],
+            "document": e["doc_type"],
             "primary source": "yes" if e["is_primary_source"] else "no", "title": e["title"],
             "published": format_new_york(e["published_at"]), "market time": format_new_york(e["effective_at"]),
             "fetched": format_new_york(e["fetched_at"]),
@@ -225,8 +328,13 @@ def page_health(conn, settings) -> None:
     b = budget_summary(settings)
     st.write(f"Ceiling **\\${b['ceiling_usd']:.2f}** total (no reset), covering {', '.join(b['covers'])}. "
              f"Safety margin \\${b['safety_margin_usd']:.2f}. Spent so far: **\\${b['spent_usd']:.2f}**.")
-    st.warning("Paid calls are BLOCKED. The spending ledger arrives in Phase 3, and paid calls also "
-               "need your explicit approval.")
+    st.info("Plan: $0 additional spending. Only free data sources are used, and no paid AI calls are made. "
+            "Any provider marked paid is refused by the app.")
+    st.markdown("#### Data providers")
+    st.dataframe([{"provider": name, "cost": "PAID (blocked)" if cfg.get("paid", True) else "free",
+                   "min seconds between calls": cfg.get("min_interval_seconds"),
+                   "max calls per run": cfg.get("max_calls_per_run")}
+                  for name, cfg in settings.raw.get("providers", {}).items()], hide_index=True, width="stretch")
 
     st.markdown("#### Latest status of each source")
     checks = conn.execute(
@@ -240,7 +348,7 @@ def page_health(conn, settings) -> None:
                        "checked": format_new_york(c["fetched_at"])} for c in checks],
                      hide_index=True, width="stretch")
     else:
-        st.write("No sources connected yet (Phase 2).")
+        st.write("No source has been checked yet. Try `python -m omkaka sources-check`.")
 
     st.markdown("#### Secrets (set / not set only — values are never shown)")
     st.dataframe([{"name": k, "status": "set" if v else "not set"} for k, v in secret_status().items()],

@@ -4,6 +4,7 @@ Pure functions (no Streamlit) so they can be tested directly.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from .models import UNAVAILABLE_STATUSES, Status
@@ -45,13 +46,16 @@ def format_number(value: float | None, unit: str) -> str:
     if value is None:
         return UNAVAILABLE_TEXT
     if unit == "USD":
-        if abs(value) >= 1e9:
-            return f"${value / 1e9:,.2f}B"
-        if abs(value) >= 1e6:
-            return f"${value / 1e6:,.2f}M"
-        return f"${value:,.2f}"
+        sign, v = ("-" if value < 0 else ""), abs(value)
+        if v >= 1e9:
+            return f"{sign}${v / 1e9:,.2f}B"
+        if v >= 1e6:
+            return f"{sign}${v / 1e6:,.2f}M"
+        return f"{sign}${v:,.2f}"
     if unit == "USD/share":
         return f"${value:,.2f}"
+    if unit == "ratio":
+        return f"{value:+.1%}"
     if unit == "shares":
         return f"{value:,.0f} shares"
     return f"{value:,.4g} {unit}"
@@ -110,3 +114,11 @@ def coverage_summary(check_rows) -> dict:
         elif s in UNAVAILABLE_STATUSES:
             counts["unavailable"] += 1
     return counts
+
+
+_NUMBER = re.compile(r"\$?\d[\d,.\-]*[MB]?")
+
+
+def reason_category(reason: str) -> str:
+    """'price $1.45 below $2.00' -> 'price … below …' so the same rule groups together."""
+    return _NUMBER.sub("…", reason.split(":")[0])[:80]

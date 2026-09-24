@@ -43,9 +43,31 @@ def reset_demo_db(settings: Settings, now: datetime | None = None) -> Path:
     conn = db.connect(path, "demo")
     try:
         seed_demo(conn, now=now)
+        seed_demo_screen(conn, settings, now=now)
     finally:
         conn.close()
     return path
+
+
+def seed_demo_screen(conn, settings: Settings, now: datetime | None = None) -> dict:
+    """Run the REAL screening pipeline against the offline fixture market."""
+    import itertools
+
+    from .pipeline import build_clients, run_screen
+    from .sources.fixtures import FixtureTransport
+    from .timeutil import NEW_YORK
+
+    if db.db_mode(conn) != "demo":
+        raise NotADemoDatabase("Refusing to run the demo screen against a non-demo database.")
+    base = (now or utc_now()) - timedelta(minutes=40)
+    tick = itertools.count()
+    clock = lambda: base + timedelta(seconds=next(tick))
+    spec = json.loads((PROJECT_ROOT / "fixtures" / "demo" / "phase2_market.json").read_text(encoding="utf-8"))
+    for t in spec.get("demo_watchlist", []):
+        store.watchlist_change(conn, t, "add", note="demo watchlist entry", now=base)
+    clients = build_clients(conn, settings, transport=FixtureTransport(base.astimezone(NEW_YORK).date()),
+                            sleep=lambda s: None, now=clock, demo_credentials=True)
+    return run_screen(conn, settings, clients, run_kind="demo", run_id="demo-screen-001", log=lambda m: None)
 
 
 def seed_demo(conn, now: datetime | None = None) -> str:

@@ -12,16 +12,15 @@ live_db_path = "data/omkaka.db"
 demo_db_path = "data/demo/omkaka_demo.db"
 
 [budget]
-# Total authorized spending ceiling in US dollars. It does NOT reset.
-# It covers Claude API calls AND any paid data services.
-total_ceiling_usd = 100.00
+# Owner decision: $0 ADDITIONAL spending. No paid data subscriptions and no
+# paid AI API calls. AI analysis happens by the owner reviewing exported
+# research packets with their existing Claude access.
+total_ceiling_usd = 0.00
 period = "total_no_reset"
-covers = ["anthropic_api", "paid_data_services"]
-# Paid work stops before reaching the ceiling by at least this amount.
-safety_margin_usd = 10.00
-# Master switch. Changing this alone does NOT authorize spending; the owner
-# must explicitly approve paid calls, and the spending ledger (Phase 3) must
-# exist. Phase 1 code refuses paid calls regardless.
+covers = ["ai_api_calls", "paid_data_services"]
+safety_margin_usd = 0.00
+# Master switch. Changing this alone does NOT authorize spending. With a $0
+# ceiling, every provider marked paid = true is refused.
 paid_calls_enabled = false
 
 [staleness_hours]
@@ -34,3 +33,78 @@ filing = 2160      # about 90 days
 reddit = 72
 press_release = 720
 default = 72
+
+[collection]
+# A run may only use data fetched within this many minutes of its start
+# (its "decision cutoff"). Anything fetched later belongs to a later run.
+window_minutes = 90
+
+# ------------------------------------------------------------------ providers
+# All providers below are FREE. "paid = true" would make the app refuse them.
+# min_interval_seconds keeps us under each provider's published rate limit.
+# max_calls_per_run is our own safety cap per screening run.
+
+[providers.sec]
+# SEC EDGAR: free, no key. Requires SEC_USER_AGENT (your name + email).
+# SEC fair-access limit: 10 requests/second; we stay well under it.
+www_base = "https://www.sec.gov"
+data_base = "https://data.sec.gov"
+min_interval_seconds = 0.15
+max_calls_per_run = 400
+paid = false
+
+[providers.massive]
+# Massive (formerly Polygon.io) free "Stocks Basic" plan: end-of-day data,
+# 5 calls/minute, personal non-commercial use. Key: MARKET_DATA_API_KEY.
+base_url = "https://api.polygon.io"
+min_interval_seconds = 12.5
+max_calls_per_run = 25
+paid = false
+
+[providers.finnhub]
+# Finnhub free tier: ~60 calls/minute, personal use. Key: NEWS_API_KEY.
+base_url = "https://finnhub.io/api/v1"
+min_interval_seconds = 1.1
+max_calls_per_run = 60
+paid = false
+
+[providers.reddit]
+# Official Reddit Data API ONLY, and only after Reddit approves your access.
+# Keys: REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT.
+auth_url = "https://www.reddit.com/api/v1/access_token"
+api_base = "https://oauth.reddit.com"
+subreddits = ["stocks", "investing", "pennystocks", "smallstreetbets", "SecurityAnalysis", "wallstreetbets"]
+min_interval_seconds = 1.0
+max_calls_per_run = 40
+paid = false
+
+# ------------------------------------------------------------------ screening
+# Stage 1 (whole market, cheap): exchange, price, market cap, liquidity.
+# Stage 2 (shortlist only): filings, fundamentals, news, Reddit.
+[screening]
+allowed_exchanges = ["NYSE", "Nasdaq"]   # as labeled in SEC's ticker file
+min_price_usd = 2.00                     # avoid sub-$2 stocks (penny-stock risks)
+min_market_cap_usd = 100_000_000         # $100M: below this, data and liquidity get thin
+max_market_cap_usd = 5_000_000_000       # $5B: keeps focus on small/mid caps
+min_avg_dollar_volume_usd = 1_000_000    # average daily $ traded; lower = hard to trade
+lookback_trading_days = 20               # days of prices used for averages and momentum
+min_days_of_data = 10                    # fewer days than this = "insufficient data"
+catalyst_lookback_days = 7               # recent 8-K filings count as possible catalysts
+filings_lookback_days = 90               # shortlist: filings history examined
+news_lookback_days = 7
+shortlist_size = 15
+# Tickers matching these patterns are skipped: share classes/preferreds ("-" or "."),
+# and 5-letter Nasdaq tickers ending in W (warrant), R (right), or U (unit).
+exclude_ticker_patterns = ["[-.]", "^[A-Z]{4}[WRU]$"]
+
+[screening.weights]
+# Points for the PRIORITIZATION score (0-100). Not a probability of success.
+volume_spike = 30       # latest volume vs its recent average
+momentum = 20           # 20-day price change (positive only)
+recent_filings = 30     # 8-K filings in the catalyst window
+smaller_size = 20       # smaller market cap within the range = more overlooked
+
+[screening.flags]
+dilution_share_growth_pct = 10   # shares outstanding up more than this in ~1 year
+thin_liquidity_multiple = 2      # avg $ volume below 2x the minimum = "thin"
+price_spike_pct = 50             # one-day move this large without a filing = check for promotion

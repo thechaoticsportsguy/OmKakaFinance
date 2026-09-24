@@ -107,6 +107,7 @@ def record_evidence(
     url: str | None = None, title: str | None = None, excerpt: str | None = None,
     storage_note: str | None = None, published_at: datetime | None = None,
     effective_at: datetime | None = None, evidence_id: str | None = None,
+    doc_type: str | None = None, dedupe_group: str | None = None,
 ) -> str:
     source_type = SourceType(source_type)
     status = check_status_and_reason(status, reason)
@@ -117,13 +118,14 @@ def record_evidence(
             """INSERT INTO evidence(evidence_id, run_id, ticker, company_name, cik, source_type,
                    is_primary_source, provider, source_identifier, url, title, excerpt,
                    content_hash, storage_note, published_at, effective_at, fetched_at,
-                   status, status_reason)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   status, status_reason, doc_type, dedupe_group)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 evidence_id, run_id, ticker, company_name, cik, source_type.value,
                 1 if source_type in PRIMARY_SOURCE_TYPES else 0, provider, source_identifier,
                 url, title, excerpt, content_hash, storage_note, to_utc_iso(published_at),
                 to_utc_iso(effective_at), to_utc_iso(fetched_at), status.value, reason,
+                doc_type, dedupe_group,
             ),
         )
     return evidence_id
@@ -219,3 +221,24 @@ def last_successful_run(conn) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT * FROM runs WHERE status = 'completed' ORDER BY finished_at DESC LIMIT 1"
     ).fetchone()
+
+
+# ---------------------------------------------------------------- watchlist
+
+def watchlist_change(conn, ticker: str, action: str, note: str | None = None, now: datetime | None = None) -> None:
+    if action not in ("add", "remove"):
+        raise ValueError("action must be 'add' or 'remove'")
+    ticker = ticker.strip().upper()
+    if not ticker.replace("-", "").replace(".", "").isalnum() or len(ticker) > 10:
+        raise ValueError(f"{ticker!r} does not look like a ticker")
+    with transaction(conn):
+        conn.execute("INSERT INTO watchlist_events(ticker, action, note, fetched_at) VALUES (?, ?, ?, ?)",
+                     (ticker, action, note, to_utc_iso(now or utc_now())))
+
+
+def current_watchlist(conn) -> list[str]:
+    rows = conn.execute(
+        """SELECT ticker, action FROM watchlist_events WHERE event_id IN
+           (SELECT MAX(event_id) FROM watchlist_events GROUP BY ticker) ORDER BY ticker"""
+    ).fetchall()
+    return [r["ticker"] for r in rows if r["action"] == "add"]

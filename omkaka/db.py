@@ -19,7 +19,7 @@ from typing import Iterator
 from .models import METRIC_ALLOWED_STATUSES, REASON_REQUIRED, Status
 from .timeutil import to_utc_iso, utc_now
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # latest; see MIGRATIONS below
 
 # SQLite GLOB pattern for our one allowed time format (UTC, microseconds).
 _TS = "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'"
@@ -183,6 +183,80 @@ BEGIN SELECT RAISE(ABORT, 'database mode cannot be removed'); END;
 """
 
 
+# ---------------------------------------------------------------- upgrades
+# Each entry: (version, SQL). Applied in order, once, to every database.
+MIGRATIONS: list[tuple[int, str]] = [
+    (2, f"""
+-- Phase 2: data sources and screening.
+ALTER TABLE evidence ADD COLUMN doc_type TEXT;        -- e.g. '8-K', '10-Q', 'news', 'reddit_post'
+ALTER TABLE evidence ADD COLUMN dedupe_group TEXT;    -- same group = same story (reposts are not independent)
+
+-- Raw HTTP responses. A CACHE, not research history: rows may be replaced or expire.
+-- The URL never contains secrets (keys are sent in headers).
+CREATE TABLE IF NOT EXISTS http_cache (
+    cache_key   TEXT PRIMARY KEY,
+    provider    TEXT NOT NULL,
+    url         TEXT NOT NULL,
+    http_status INTEGER NOT NULL,
+    body        TEXT NOT NULL,
+    fetched_at  TEXT NOT NULL {_ts('fetched_at')},
+    expires_at  TEXT NOT NULL {_ts('expires_at')}
+);
+
+-- End-of-day prices (unadjusted, as traded). Append-only.
+CREATE TABLE IF NOT EXISTS market_bars (
+    ticker       TEXT NOT NULL,
+    trade_date   TEXT NOT NULL,              -- YYYY-MM-DD (New York)
+    open REAL, high REAL, low REAL,
+    close        REAL NOT NULL,
+    volume       REAL NOT NULL,
+    vwap         REAL,
+    provider     TEXT NOT NULL,
+    source_url   TEXT NOT NULL,
+    effective_at TEXT NOT NULL {_ts('effective_at')},   -- the 4:00 PM ET close
+    fetched_at   TEXT NOT NULL {_ts('fetched_at')},
+    run_id       TEXT REFERENCES runs(run_id),
+    PRIMARY KEY (ticker, trade_date, provider)
+);
+
+-- Every screening decision, with reasons. Append-only.
+CREATE TABLE IF NOT EXISTS screening_results (
+    result_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id        TEXT NOT NULL REFERENCES runs(run_id),
+    stage         TEXT NOT NULL CHECK (stage IN ('prefilter', 'shortlist')),
+    ticker        TEXT NOT NULL,
+    cik           TEXT,
+    company_name  TEXT,
+    exchange      TEXT,
+    outcome       TEXT NOT NULL CHECK (outcome IN ('passed', 'failed_threshold', 'insufficient_data', 'watchlist_only')),
+    score         REAL,                      -- prioritization only; NOT a probability
+    rank          INTEGER,
+    components_json TEXT NOT NULL DEFAULT '{{}}',
+    flags_json      TEXT NOT NULL DEFAULT '[]',
+    reasons_json    TEXT NOT NULL DEFAULT '[]',
+    inputs_json     TEXT NOT NULL DEFAULT '{{}}',
+    fetched_at    TEXT NOT NULL {_ts('fetched_at')}
+);
+CREATE INDEX IF NOT EXISTS idx_screen_run ON screening_results(run_id, stage, outcome);
+
+-- Your watchlist, as a history of add/remove actions. Append-only.
+CREATE TABLE IF NOT EXISTS watchlist_events (
+    event_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker     TEXT NOT NULL,
+    action     TEXT NOT NULL CHECK (action IN ('add', 'remove')),
+    note       TEXT,
+    fetched_at TEXT NOT NULL {_ts('fetched_at')}
+);
+""" + "\n".join(
+        f"""CREATE TRIGGER IF NOT EXISTS {t}_no_update BEFORE UPDATE ON {t}
+BEGIN SELECT RAISE(ABORT, 'append-only table {t}: updates are not allowed'); END;
+CREATE TRIGGER IF NOT EXISTS {t}_no_delete BEFORE DELETE ON {t}
+BEGIN SELECT RAISE(ABORT, 'append-only table {t}: deletes are not allowed'); END;"""
+        for t in ("market_bars", "screening_results", "watchlist_events")
+    )),
+]
+
+
 class WrongDatabaseMode(RuntimeError):
     """Raised when a demo database is opened as live, or vice versa."""
 
@@ -195,8 +269,11 @@ def _raw_connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def init_db(path: Path | str, mode: str) -> None:
-    """Create the database (if needed) and stamp it with its mode."""
+def init_db(path: Path | str, mode: str, target_version: int = SCHEMA_VERSION) -> None:
+    """Create the database (if needed), stamp it with its mode, and upgrade it.
+
+    Upgrades only ADD tables/columns; existing history is never rewritten.
+    """
     if mode not in ("live", "demo"):
         raise ValueError(f"mode must be 'live' or 'demo', got {mode!r}")
     path = Path(path)
@@ -211,11 +288,27 @@ def init_db(path: Path | str, mode: str) -> None:
             if row is None:
                 conn.execute("INSERT INTO meta(key, value) VALUES ('db_mode', ?)", (mode,))
                 conn.execute("INSERT INTO meta(key, value) VALUES ('created_at', ?)", (to_utc_iso(utc_now()),))
-                conn.execute("INSERT INTO meta(key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
+                conn.execute("INSERT INTO meta(key, value) VALUES ('schema_version', '1')")
             elif row["value"] != mode:
                 raise WrongDatabaseMode(f"{path} is a {row['value']!r} database, not {mode!r}.")
+        _migrate(conn, target_version)
     finally:
         conn.close()
+
+
+def schema_version(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()["value"])
+
+
+def _migrate(conn: sqlite3.Connection, target_version: int) -> None:
+    current = schema_version(conn)
+    for version, script in MIGRATIONS:
+        if current < version <= target_version:
+            # executescript commits on its own; each step is small and additive.
+            conn.executescript(script)
+            with transaction(conn):
+                conn.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(version),))
+            current = version
 
 
 def connect(path: Path | str, expected_mode: str) -> sqlite3.Connection:

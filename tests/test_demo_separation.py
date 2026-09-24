@@ -13,10 +13,14 @@ def test_demo_db_builds_and_is_fully_labelled(demo_settings):
     conn = db.connect(path, "demo")
     assert db.db_mode(conn) == "demo"
     assert all(r["is_demo"] == 1 for r in conn.execute("SELECT is_demo FROM runs"))
-    providers = {r[0] for r in conn.execute("SELECT DISTINCT provider FROM evidence")}
-    assert providers == {"DEMO FIXTURE"}
-    assert all("FICTIONAL" in r[0] for r in conn.execute("SELECT title FROM evidence"))
-    assert all(r[0].startswith("https://example.com/") for r in conn.execute("SELECT url FROM evidence"))
+    assert conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] > 0
+    for title, company in conn.execute("SELECT title, coalesce(company_name, '') FROM evidence"):
+        assert "FICTIONAL" in title or "FICTIONAL" in company
+    # Every link in the demo must be a harmless example.com address, never a real site.
+    for table, col in (("evidence", "url"), ("metric_values", "source_url"), ("market_bars", "source_url"),
+                       ("source_checks", "query")):
+        for (u,) in conn.execute(f"SELECT {col} FROM {table} WHERE {col} LIKE 'http%'"):
+            assert u.startswith("https://example.com/"), (table, u)
     assert journal.verify_chain(conn)[0]
     conn.close()
 

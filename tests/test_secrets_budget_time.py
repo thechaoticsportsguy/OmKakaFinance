@@ -30,11 +30,11 @@ def test_gitignore_blocks_env_and_data():
     assert ".env" in lines and "data/" in lines
 
 
-def test_budget_is_100_total_no_reset_and_paid_calls_blocked():
+def test_budget_is_zero_and_paid_calls_blocked():
     s = load_settings("live")
     b = budget_summary(s)
-    assert b["ceiling_usd"] == 100.0 and b["period"] == "total_no_reset"
-    assert "paid_data_services" in b["covers"] and "anthropic_api" in b["covers"]
+    assert b["ceiling_usd"] == 0.0 and b["period"] == "total_no_reset"
+    assert "paid_data_services" in b["covers"] and "ai_api_calls" in b["covers"]
     assert b["paid_calls_enabled_in_settings"] is False
     with pytest.raises(PaidCallsBlocked, match="Research paused"):
         require_paid_calls_allowed(s, 0.01)
