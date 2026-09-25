@@ -22,6 +22,8 @@ still requires the owner's credentials and a successful live run.
 - **Markets** is the default home page and works without API keys. Search a real stock symbol to see its
   latest available price, daily chart, headline links, and watchlist controls. Prices may be delayed;
   quote time and retrieval time are shown. Quotes are cached for five minutes and news for fifteen minutes.
+  At the bottom, **Your watchlist** can show each saved symbol's latest price and day change (switch on
+  **Show latest prices**; about one second per symbol the first time), open a symbol's chart, or remove it.
 - Double-click **start_demo.bat** for the fictional offline demo at <http://localhost:8502>.
 - Both can stay open together. The helpers reopen a running dashboard instead of starting another copy.
 - In the live workspace, choose **Setup & connections**. Enter your SEC contact details (name and email),
@@ -194,6 +196,7 @@ All thresholds live in `config/settings.toml` with plain-English comments.
 | `watch add TICKER` / `watch remove TICKER` / `watch list` | watchlist |
 | `paper …` | paper portfolio (see above) |
 | `backup` | safe copy of the database into `data\backups` (newest 30 kept) |
+| `compact` | delete expired download cache and shrink the database file |
 | `doctor` | check the whole setup and explain problems in plain English |
 | `verify` | journal tamper check |
 | `status` | settings, budget, which keys are set |
@@ -205,6 +208,10 @@ Double-click helpers: `setup_windows.bat`, `start_demo.bat`, `start_app.bat`, `i
 
 - Automatic: after every successful daily run (kept in `data\backups`, newest 30).
 - Manual: `python -m omkaka backup`, or the button on the Health page.
+- **Database size:** downloaded source files are cached briefly inside the database and cleared automatically
+  after every screening run; after a daily run, the file is compacted once more than 50 MB of space is unused
+  (before the backup, so backups stay small too). `python -m omkaka compact` does it on demand, and `doctor`
+  shows the size. Only the disposable cache is removed, never research history.
 - Off-computer copy (recommended weekly): copy the `data\backups` folder to a USB drive or cloud folder.
 - **Restore:** close the app and scheduled runs (`schedule uninstall`), rename `data\omkaka.db` to
   `data\omkaka-broken.db`, copy the backup file to `data\omkaka.db`, run `python -m omkaka doctor`, then

@@ -18,6 +18,9 @@ def apply_style():
     [data-testid="stCaptionContainer"] { color:#66758b; }
     [data-testid="stSidebar"] { background:#142038; border-right:none; min-width:245px!important; max-width:245px!important; }
     [data-testid="stSidebar"] * { color:#e9edf6; }
+    /* Sidebar link buttons: light text needs a dark button (white-on-white was unreadable). */
+    [data-testid="stSidebar"] [data-testid^="stBaseLinkButton"] { background:#22314b; border-color:#3a4a69; }
+    [data-testid="stSidebar"] [data-testid^="stBaseLinkButton"]:hover { background:#2b3955; border-color:#9f95ff; }
     [data-testid="stSidebar"] [data-testid="stSidebarContent"] { padding-top:0; }
     [data-testid="stSidebarUserContent"] { padding:1.2rem 1rem!important; }
     [data-testid="stSidebar"] [data-testid="stCaptionContainer"] { color:#9ba9bf; }

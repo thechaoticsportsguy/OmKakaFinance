@@ -14,6 +14,30 @@ from ..timeutil import format_new_york
 from .style import header
 
 
+WATCHLIST_QUOTE_LIMIT = 12  # about one second per uncached quote (Yahoo rate limit in settings.toml)
+
+
+def watchlist_rows(client, symbols: list[str], limit: int = WATCHLIST_QUOTE_LIMIT) -> list[dict]:
+    """Latest quote for each watchlist symbol. A failed lookup stays 'Unavailable', never zero."""
+    rows = []
+    for sym in symbols[:limit]:
+        try:
+            result = client.chart(sym)
+        except ValueError:  # a saved symbol Yahoo's format rules reject
+            rows.append({"Symbol": sym, "Price": "Unavailable", "Day change": "—",
+                         "Quote time": "—", "Status": "Symbol format not supported"})
+            continue
+        q = result.data if result.status in (Status.OK, Status.PARTIAL) and result.data else None
+        price = q.get("price") if q else None
+        change = q.get("change_pct") if q else None
+        rows.append({"Symbol": sym,
+                     "Price": "Unavailable" if price is None else f"{price:,.2f} {q.get('currency', '')}".strip(),
+                     "Day change": "—" if change is None else f"{change:+.2f}%",
+                     "Quote time": format_new_york(q.get("as_of")) if q else "—",
+                     "Status": "OK" if price is not None else (result.reason or "Data unavailable")})
+    return rows
+
+
 def page_markets(conn, settings):
     header("Market desk", "Real stocks. A clearer view.", "Explore prices, charts, and company headlines without setting up API keys.")
     if settings.is_demo:
@@ -110,5 +134,21 @@ def page_markets(conn, settings):
     watch = store.current_watchlist(conn)
     if watch:
         st.markdown("#### Your watchlist")
-        st.write(" · ".join(watch))
-        st.caption("Enter any saved symbol above to open its chart and headlines.")
+        st.caption("Symbols here are also researched in every daily run, even if they fail the screen.")
+        if st.toggle("Show latest prices", key="watch_prices",
+                     help="About one second per symbol the first time; cached for five minutes after that."):
+            with st.spinner("Loading watchlist quotes…"):
+                rows = watchlist_rows(client, watch)
+            st.dataframe(rows, hide_index=True, width="stretch")
+            if len(watch) > WATCHLIST_QUOTE_LIMIT:
+                st.caption(f"Showing the first {WATCHLIST_QUOTE_LIMIT} of {len(watch)} symbols.")
+        else:
+            st.write(" · ".join(watch))
+        pick, open_col, remove_col = st.columns([2, 1, 1])
+        chosen = pick.selectbox("Watchlist symbol", watch, key="watch_pick", label_visibility="collapsed")
+        if open_col.button("Open chart", key="watch_open", width="stretch"):
+            st.session_state["market_symbol"] = chosen
+            st.rerun()
+        if remove_col.button("Remove", key="watch_remove", width="stretch"):
+            store.watchlist_change(conn, chosen, "remove", note="Removed from real market overview")
+            st.rerun()

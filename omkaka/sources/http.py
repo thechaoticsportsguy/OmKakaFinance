@@ -71,6 +71,26 @@ class FetchResult:
         return self.status is Status.OK
 
 
+def prune_cache(conn, now: datetime | None = None) -> dict:
+    """Delete expired cache rows. The cache is disposable (never evidence or history).
+
+    Without this, large responses (SEC financial files, whole-market price files)
+    would pile up forever and the database would grow by tens of MB per day.
+    Returns {"rows": deleted row count, "bytes": approximate bytes freed}.
+    """
+    cutoff = to_utc_iso(now or utc_now())
+    with transaction(conn):
+        freed = conn.execute("SELECT COUNT(*), COALESCE(SUM(LENGTH(body)), 0) FROM http_cache WHERE expires_at <= ?",
+                             (cutoff,)).fetchone()
+        conn.execute("DELETE FROM http_cache WHERE expires_at <= ?", (cutoff,))
+    return {"rows": int(freed[0]), "bytes": int(freed[1])}
+
+
+def cache_size(conn) -> dict:
+    row = conn.execute("SELECT COUNT(*), COALESCE(SUM(LENGTH(body)), 0) FROM http_cache").fetchone()
+    return {"rows": int(row[0]), "bytes": int(row[1])}
+
+
 def redact(text: str, secrets: list[str]) -> str:
     for s in secrets:
         if s and len(s) >= 4:

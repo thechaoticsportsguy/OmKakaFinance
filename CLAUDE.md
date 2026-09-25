@@ -19,6 +19,9 @@ When asked to review one, follow the "Instructions for the reviewer" at the top 
 - Current handoff (September 24, 2026): the live app opens on Markets, using Yahoo Finance prices and RSS headlines without API keys. Keep this separate from the credential-gated SEC/Massive/Finnhub daily screening pipeline.
 - The redesigned UI lives in `omkaka/ui/style.py`, `markets.py`, `research_view.py`, and `setup_page.py`. Live uses port 8501; the offline demo uses 8502. All 186 tests passed on Windows before this handoff.
 - Credentials and personal databases remain local and ignored by Git. Never commit `.env`, `data/`, or secrets. Automated scheduling is intentionally gated on verified required connections and a successful live screen.
+- The `http_cache` table is disposable: expired rows are pruned after every screen and `compact`/daily housekeeping
+  VACUUMs when >50 MB is unused. Keep cache lifetimes short for large responses (data worth keeping belongs in its own
+  append-only table, e.g. `market_bars`).
 - Cloud edits do not update the user's running Windows app automatically: changes must be pulled locally, checked, and the app restarted.
 - Run checks: `python -m pytest` (all tests must pass; paid services are never called).
 - Keep code simple and readable; explain changes in plain English.

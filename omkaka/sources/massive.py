@@ -30,9 +30,10 @@ class MassiveClient:
         if not self.api_key:
             return FetchResult(PROVIDER, url, Status.NOT_CONFIGURED,
                                "MARKET_DATA_API_KEY is not set in .env (free Massive key).", None, self.http.now())
-        # Past days never change, so cache them for a long time.
+        # Each day's prices are saved permanently in market_bars, so the raw (~1 MB)
+        # response only needs to survive a retry on the same day.
         return self.http.get(PROVIDER, url, params={"adjusted": "false"},
-                             headers={"Authorization": f"Bearer {self.api_key}"}, ttl_hours=24 * 30)
+                             headers={"Authorization": f"Bearer {self.api_key}"}, ttl_hours=24)
 
 
 def parse_grouped_daily(data: dict) -> list[dict]:

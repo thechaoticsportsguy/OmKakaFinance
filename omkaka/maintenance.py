@@ -2,6 +2,7 @@
 
     python -m omkaka backup   safe copy of the database into data/backups (keeps the newest N)
     python -m omkaka doctor   checks your setup and explains any problem in plain English
+    python -m omkaka compact  removes expired download cache and gives the space back to Windows
 """
 from __future__ import annotations
 
@@ -43,6 +44,55 @@ def backup_database(settings: Settings, now: datetime | None = None) -> Path:
     return dest
 
 
+AUTO_COMPACT_BYTES = 50 * 1024 * 1024  # reclaim space automatically once 50 MB is unused
+
+
+def _file_mb(path: Path) -> float:
+    return path.stat().st_size / 1e6 if path.exists() else 0.0
+
+
+def unused_bytes(conn) -> int:
+    """Space inside the database file that holds no data (left behind by deleted cache rows)."""
+    return conn.execute("PRAGMA freelist_count").fetchone()[0] * conn.execute("PRAGMA page_size").fetchone()[0]
+
+
+def compact_database(settings: Settings, conn=None, now: datetime | None = None) -> dict:
+    """Delete expired cache rows, then VACUUM so the file actually shrinks.
+
+    Only the disposable download cache is deleted; research history is never touched.
+    VACUUM needs a moment when nothing else is writing; if the dashboard is busy it is
+    skipped and reported, and simply happens next time.
+    """
+    from .sources.http import prune_cache
+
+    own = conn is None
+    conn = conn or db.connect(settings.db_path, settings.mode)
+    before = _file_mb(settings.db_path)
+    try:
+        pruned = prune_cache(conn, now)
+        vacuumed, note = False, None
+        try:
+            conn.execute("VACUUM")
+            vacuumed = True
+        except sqlite3.OperationalError as exc:
+            note = f"Space not reclaimed yet ({exc}); it will be retried next time."
+    finally:
+        if own:
+            conn.close()
+    return {"cache_rows_deleted": pruned["rows"], "cache_mb_deleted": pruned["bytes"] / 1e6,
+            "size_mb_before": before, "size_mb_after": _file_mb(settings.db_path), "vacuumed": vacuumed, "note": note}
+
+
+def compact_if_worthwhile(settings: Settings, conn, now: datetime | None = None) -> dict | None:
+    """Prune the cache; VACUUM only when enough unused space has built up (keeps daily runs quick)."""
+    from .sources.http import prune_cache
+
+    prune_cache(conn, now)
+    if unused_bytes(conn) < AUTO_COMPACT_BYTES:
+        return None
+    return compact_database(settings, conn, now)
+
+
 def doctor(settings: Settings) -> list[tuple[str, str, str]]:
     """Returns (status, check, detail) rows. status is OK, WARN, or PROBLEM."""
     rows: list[tuple[str, str, str]] = []
@@ -78,6 +128,13 @@ def doctor(settings: Settings) -> list[tuple[str, str, str]]:
             add(secrets[name], name, "set" if secrets[name] else "not set (see .env.example)", warn=True)
         reddit = all(secrets[n] for n in ("REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USER_AGENT"))
         add(reddit, "Reddit access", "set" if reddit else "not set: Reddit shows as Data unavailable (OK)", warn=True)
+
+        from .sources.http import cache_size
+        cache = cache_size(conn)
+        size_mb, cache_mb, free_mb = _file_mb(path), cache["bytes"] / 1e6, unused_bytes(conn) / 1e6
+        add(size_mb < 1000 and cache_mb < 200, "Database size",
+            f"{size_mb:,.0f} MB (download cache {cache_mb:,.0f} MB, unused {free_mb:,.0f} MB)"
+            + ("" if size_mb < 1000 and cache_mb < 200 else ": run  python -m omkaka compact"), warn=True)
 
         from .daily import latest_daily_status
         from .market_calendar import previous_trading_day

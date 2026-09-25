@@ -170,7 +170,7 @@ def publish_result(conn, settings: Settings, run_id: str, extra: dict, dedupe_ke
 
 
 def _after_success(conn, settings: Settings, now: datetime, log) -> None:
-    """Housekeeping after a successful daily run: fill paper orders, back up the database."""
+    """Housekeeping after a successful daily run: fill paper orders, compact, back up the database."""
     try:
         from .portfolio import fill_pending
         for f in fill_pending(conn, settings, now=now):
@@ -178,8 +178,13 @@ def _after_success(conn, settings: Settings, now: datetime, log) -> None:
     except ImportError:
         pass
     try:
-        from .maintenance import backup_database
+        from .maintenance import backup_database, compact_if_worthwhile
         if not settings.is_demo:
+            # Compact first so each of the kept backups is small too.
+            compacted = compact_if_worthwhile(settings, conn, now)
+            if compacted:
+                log(f"Database compacted: {compacted['size_mb_before']:,.0f} MB -> {compacted['size_mb_after']:,.0f} MB"
+                    + (f" ({compacted['note']})" if compacted["note"] else ""))
             log(f"Backup saved: {backup_database(settings)}")
     except ImportError:
         pass

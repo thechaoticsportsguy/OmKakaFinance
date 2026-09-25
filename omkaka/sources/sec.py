@@ -53,7 +53,8 @@ class SecClient:
         url = (f"{self.www}/Archives/edgar/daily-index/{day.year}/QTR{quarter_of(day)}/"
                f"form.{day.strftime('%Y%m%d')}.idx")
         # No file for weekends/holidays -> 404 -> NO_RESULTS (nothing filed), not a failure.
-        return self._get(url, ttl_hours=24 * 30, parse="text")
+        # Kept two weeks: long enough to cover the catalyst window without re-downloading.
+        return self._get(url, ttl_hours=24 * 14, parse="text")
 
     def submissions(self, cik) -> FetchResult:
         return self._get(f"{self.data}/submissions/CIK{cik10(cik)}.json", ttl_hours=6,

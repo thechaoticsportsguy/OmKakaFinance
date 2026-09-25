@@ -23,7 +23,7 @@ from .sources import finnhub as fh
 from .sources import massive as ms
 from .sources import reddit as rd
 from .sources import sec
-from .sources.http import FetchResult, HttpClient
+from .sources.http import FetchResult, HttpClient, prune_cache
 from .timeutil import NEW_YORK, to_utc_iso, utc_now
 
 
@@ -118,6 +118,8 @@ class ScreenRun:
             store.finish_run(self.conn, self.run_id, "failed", reason=f"{type(exc).__name__}: {exc}",
                              now=self.c.http.now())
             raise
+        finally:
+            self.summary["cache_pruned"] = prune_cache(self.conn, self.c.http.now())
         return self.summary
 
     def _fail(self, reason: str) -> None:

@@ -14,6 +14,7 @@
     python -m omkaka paper deposit AMOUNT | withdraw AMOUNT | buy TICKER QTY | sell TICKER QTY
                            | fill | status | dividend TICKER EXDATE AMOUNT SOURCE | split TICKER EXDATE RATIO SOURCE
     python -m omkaka backup          safe copy of the live database into data\backups
+    python -m omkaka compact         remove expired download cache and shrink the database file
     python -m omkaka doctor          check the whole setup and explain problems
     python -m omkaka verify          check the live journal has not been tampered with
     python -m omkaka status          show settings and which secrets are set (never values)
@@ -66,7 +67,7 @@ def _sources_check() -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m omkaka", description="OmKakaFinance")
     parser.add_argument("command", choices=["init", "app", "demo", "demo-reset", "sources-check", "screen",
-                                            "packet", "watch", "review", "daily", "schedule", "paper", "backup", "doctor", "verify", "status"])
+                                            "packet", "watch", "review", "daily", "schedule", "paper", "backup", "compact", "doctor", "verify", "status"])
     parser.add_argument("args", nargs="*", help="extra arguments (watch add/remove/list TICKER)")
     parser.add_argument("--demo", action="store_true", help="use the demo database (verify/status/packet)")
     parser.add_argument("--run", help="run id (packet)")
@@ -212,6 +213,16 @@ def main(argv: list[str] | None = None) -> int:
         s, conn = _live_conn()
         conn.close()
         print(f"Backup saved: {backup_database(s)}")
+    elif a.command == "compact":
+        from .maintenance import compact_database
+
+        s, conn = _live_conn()
+        conn.close()
+        r = compact_database(s)
+        print(f"Removed {r['cache_rows_deleted']} expired cache entries ({r['cache_mb_deleted']:,.1f} MB). "
+              f"Database: {r['size_mb_before']:,.1f} MB -> {r['size_mb_after']:,.1f} MB.")
+        if r["note"]:
+            print(r["note"])
     elif a.command == "doctor":
         from .maintenance import doctor
 
