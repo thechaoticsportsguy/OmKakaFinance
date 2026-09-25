@@ -12,8 +12,40 @@ with every number sourced, checked, and recorded in a permanent journal.
 The app does the gathering, screening, checking and record-keeping. The *interpretation* is yours: read the
 brief and research packet, or have your existing Claude review them (see [Using Claude](#using-your-claude-at-0)).
 
-**Status: all six phases built.** 164 automated checks pass offline. Live data connections have **not** been
-tested against the real services yet (see [What is not verified](#what-is-not-verified-yet)).
+**Status: refreshed dashboard, real market explorer, and guided setup.** The no-key Yahoo price and headline
+connections have been tested on this Windows computer. The SEC/Massive/Finnhub automated daily pipeline
+still requires the owner's credentials and a successful live run.
+
+## Start here — everyday use
+
+- Double-click **start_app.bat** for the live workspace at <http://localhost:8501>.
+- **Markets** is the default home page and works without API keys. Search a real stock symbol to see its
+  latest available price, daily chart, headline links, and watchlist controls. Prices may be delayed;
+  quote time and retrieval time are shown. Quotes are cached for five minutes and news for fifteen minutes.
+- Double-click **start_demo.bat** for the fictional offline demo at <http://localhost:8502>.
+- Both can stay open together. The helpers reopen a running dashboard instead of starting another copy.
+- In the live workspace, choose **Setup & connections**. Enter your SEC contact details (name and email),
+  Massive key, and Finnhub key in the private form. Blank fields preserve already-saved values.
+- Click **Check live connections**, then **Run today's research**. The first full run may take several minutes.
+- After a successful real run and recent connection checks, **Enable 6 a.m. schedule** becomes available.
+  Keep Windows on, awake, online, and signed in overnight. The app starts checking from 4:30 a.m. Eastern.
+- **Today** presents the candidate, price history, screening factors, risks, and source timeline.
+  Use **Numbers & sources** for the supporting data or **Full checked brief** for the original text.
+- After a failed run, fix the connection and click **Run today's research** again. The failed entry remains
+  in the journal. Successful daily results are not duplicated.
+
+The real Markets view and offline demo are usable immediately. Verified daily candidates and the morning
+schedule require your own source credentials; passing offline tests does not verify those accounts.
+Reddit remains optional and needs separate approval. Public Yahoo endpoints can change or become unavailable;
+the app reports failures rather than substituting fictional data. Market-explorer quotes do not enter the
+verified daily-pick or paper-portfolio price history.
+
+### Windows fixes and setup safeguards
+
+Backup database handles are now closed before old copies are removed. Connection checks return failure
+when required sources fail, use the NYSE calendar, bypass cached responses, and validate response formats.
+Edits to `.env` are picked up without restarting the dashboard. Editing a checked brief requires a new check
+before it can be saved. The scheduler cannot be installed before setup verification completes.
 
 ---
 
@@ -46,7 +78,7 @@ keeps all history.
 ```powershell
 .venv\Scripts\python.exe -m omkaka demo
 ```
-Opens <http://localhost:8501> with **fictional** companies (DEMOX, DEMOA, …) and a red DEMO banner on every page.
+Opens <http://localhost:8502> with **fictional** companies (DEMOX, DEMOA, …) and a red DEMO banner on every page.
 Press **Ctrl+C** in PowerShell to stop.
 
 ## 2. Free data sources and keys
@@ -194,14 +226,16 @@ Double-click helpers: `setup_windows.bat`, `start_demo.bat`, `start_app.bat`, `i
 | Demo never mixes with live | Separate database files stamped `demo`/`live`; fictional companies; all demo links go to example.com. |
 | $0 spending | Every provider is `paid = false`; paid or unknown providers are refused before any request. |
 
-## 8. What is not verified yet
+## 8. Verification and remaining setup
 
-- **No live call to any real data source has been made during development** (the build environment's network
-  blocked them). Everything was tested against realistic offline fixtures. Run `sources-check`, then `daily`,
-  and check `doctor` and the Health page. If a source's format differs from its documentation, the app shows
-  that source as failed/unavailable rather than inventing data.
-- The **Windows Task Scheduler** setup and the `.bat` files were written for Windows but could not be run here.
-  Check with `python -m omkaka schedule status` and `data\logs\daily.log`.
+- **Real Yahoo Finance prices, charts, and headlines were verified on this Windows computer** on
+  September 24, 2026, including Apple and Microsoft ticker searches. The Markets page needs no API keys.
+  Quotes may be delayed; inspect their displayed timestamps.
+- **186 automated checks pass.** The live and demo dashboards launch on Windows using separate data stores.
+- **SEC, Massive, and Finnhub connections still need credentials and live verification.** Run the connection
+  check in Setup, then today's research. Failed or unavailable sources are displayed honestly.
+- **Windows Task Scheduler is not installed yet.** Installation remains gated until required connections
+  and a live screening run pass. Check `python -m omkaka schedule status` and `data\logs\daily.log` afterward.
 - Massive's free-plan terms were confirmed only through search results; confirm on massive.com when signing up.
 - SEC's bulk share-count data can miss companies with several share classes; they show as "insufficient data".
 - Reddit access depends on Reddit's manual approval.

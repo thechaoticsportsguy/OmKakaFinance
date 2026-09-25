@@ -5,3 +5,5 @@ python-dotenv>=1.0,<2   # reads secrets from your local .env file
 tzdata>=2024.1          # timezone data (needed on Windows for America/New_York)
 pytest>=8,<10           # runs the automated checks
 requests>=2.31,<3       # web requests to the free data sources
+altair>=5,<7            # source-backed price charts
+pandas>=2,<4            # chart data tables

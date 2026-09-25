@@ -91,6 +91,7 @@ class HttpClient:
         self.monotonic = monotonic
         self.now = now
         self.secrets = [s for s in (secrets or []) if s]
+        self.bypass_cache = False
         self._last_call: dict[str, float] = {}
         self.calls: dict[str, int] = {}
 
@@ -150,7 +151,7 @@ class HttpClient:
             return self._result(provider, shown, Status.NO_ACCESS, str(exc))
 
         key = self.cache_key(provider, method, url, params)
-        if ttl_hours > 0 and method == "GET":
+        if ttl_hours > 0 and method == "GET" and not self.bypass_cache:
             row = self._read_cache(key)
             if row is not None:
                 return self._parse(provider, shown, row["http_status"], row["body"], parse,

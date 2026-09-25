@@ -10,7 +10,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SETTINGS_FILE = PROJECT_ROOT / "config" / "settings.toml"
@@ -71,7 +71,6 @@ def get_mode() -> str:
 
 
 def load_settings(mode: str | None = None) -> Settings:
-    load_dotenv(PROJECT_ROOT / ".env", override=False)
     raw = tomllib.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     mode = mode or get_mode()
     if mode not in MODES:
@@ -86,8 +85,11 @@ def load_settings(mode: str | None = None) -> Settings:
 def get_secret(name: str) -> SecretValue | None:
     if name not in SECRET_NAMES:
         raise KeyError(f"Unknown secret name {name!r}")
-    load_dotenv(PROJECT_ROOT / ".env", override=False)
-    value = os.environ.get(name, "").strip()
+    # Read the file afresh so edits take effect in an already-running dashboard.
+    # Explicit environment variables still take precedence (useful for tests).
+    value = (os.environ.get(name) if name in os.environ else
+             dotenv_values(PROJECT_ROOT / ".env", interpolate=False).get(name)) or ""
+    value = value.strip()
     return SecretValue(value) if value else None
 
 

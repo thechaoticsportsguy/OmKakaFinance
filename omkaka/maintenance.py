@@ -9,6 +9,7 @@ import importlib
 import shutil
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -26,11 +27,12 @@ def backup_database(settings: Settings, now: datetime | None = None) -> Path:
     folder = src.parent / "backups"
     folder.mkdir(parents=True, exist_ok=True)
     dest = folder / f"{src.stem}-{now.astimezone(NEW_YORK).strftime('%Y%m%d-%H%M%S')}.db"
-    with sqlite3.connect(str(src)) as s_conn, sqlite3.connect(str(dest)) as d_conn:
+    # SQLite's own context manager commits transactions but leaves files open.
+    # Close both handles so Windows can prune older backup files safely.
+    with closing(sqlite3.connect(str(src))) as s_conn, closing(sqlite3.connect(str(dest))) as d_conn:
         s_conn.backup(d_conn)
-    check = sqlite3.connect(str(dest))
-    ok = check.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    check.close()
+    with closing(sqlite3.connect(str(dest))) as check:
+        ok = check.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     if not ok:
         dest.unlink(missing_ok=True)
         raise RuntimeError("Backup copy failed its integrity check; the original is untouched.")

@@ -22,7 +22,9 @@ def test_demo_pages_render_with_banner(demo_settings, monkeypatch, page):
 def test_live_today_page_empty_state(tmp_path, monkeypatch):
     monkeypatch.setenv("OMKAKA_MODE", "live")
     monkeypatch.setenv("OMKAKA_DB_PATH", str(tmp_path / "live.db"))
-    at = AppTest.from_file(APP, default_timeout=30).run()
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.session_state["view"] = "Today"
+    at.run()
     assert not at.exception
     assert not any("DEMO MODE" in e.value for e in at.error)
     assert any("No research result yet" in w.value for w in at.warning)

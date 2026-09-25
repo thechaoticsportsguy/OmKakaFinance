@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from html import escape as html_escape
 
 import streamlit as st
 
@@ -11,6 +12,9 @@ from ..config import load_settings, secret_status
 from ..packet import format_input
 from ..display import coverage_summary, describe_metric, md_escape as esc, reason_category, staleness_category, status_text
 from ..timeutil import format_new_york, parse_utc_iso
+from .style import apply_style, card, header
+from .setup_page import page_setup, research_button
+from .markets import page_markets
 
 LABEL_COLORS = {"CONFIRMED": "green", "THIRD_PARTY": "orange", "AI_ESTIMATE": "violet"}
 
@@ -18,11 +22,10 @@ LABEL_COLORS = {"CONFIRMED": "green", "THIRD_PARTY": "orange", "AI_ESTIMATE": "v
 def _banner(settings) -> None:
     if settings.is_demo:
         st.error(
-            "🧪 **DEMO MODE — OFFLINE FICTIONAL DATA.** Every company, number, and link here is "
-            "made up to show how the app works. Nothing here is research or advice.",
+            "**DEMO MODE · Fictional companies and sample data.** Explore the workflow here; use the live workspace for real research.",
         )
     else:
-        st.info("🔎 Research tool only. No broker connection, no real orders, no automatic trading.")
+        st.caption("LOCAL RESEARCH WORKSPACE  ·  Paper tracking only  ·  No automatic trading")
 
 
 def _connect(settings):
@@ -60,7 +63,23 @@ def _day_status(settings) -> tuple[str | None, object]:
 
 
 def page_today(conn, settings) -> None:
-    st.header("Today's research result")
+    header("The daily brief", "Your morning research.", "One candidate to investigate. Every number traceable. Every decision yours.")
+    if not settings.is_demo:
+        from ..setup import missing_credentials
+        if missing_credentials():
+            left, right = st.columns([1.8, 1], gap="large")
+            with left:
+                st.html('<div class="ok-hero"><span class="ok-pill amber">SETUP NEEDED</span>'
+                        '<h2>Your research starts here.</h2><p>Connect your market data and news accounts to get a checked brief for each trading day.</p></div>')
+                st.warning("No research result yet. Add your three connections to start live research.")
+                st.button("Set up my connections →", type="primary", on_click=lambda: st.session_state.update(view="Setup & connections"))
+                st.link_button("Explore the sample workspace", "http://localhost:8502/")
+            with right:
+                card("01 · Connect", "Add your SEC contact details and your Massive and Finnhub keys. Save them privately in the app.")
+                card("02 · Verify", "Check your connections and run your first research session.")
+                card("03 · Make it a morning habit", "Enable the 6 a.m. schedule after the checks pass.")
+            return
+        research_button(conn, settings, "today_research")
     closed, expected = _day_status(settings)
     if closed:
         st.info(f"Market closed today ({closed}). No new brief is produced; showing the latest one.")
@@ -68,8 +87,7 @@ def page_today(conn, settings) -> None:
     if entry is not None and "brief_markdown" in json.loads(entry["payload_json"]):
         return _render_brief_entry(conn, settings, entry, expected)
     if entry is None:
-        st.warning("No research result yet. For now: run a screen, then build a research packet on the "
-                   "Screening page and review it with your own Claude access. (Try the demo: `python -m omkaka demo`.)")
+        st.warning("No research result yet. Use Run today's research above to gather sources and produce your first checked brief.")
         return
     payload = json.loads(entry["payload_json"])
     st.caption(f"Written {format_new_york(entry['fetched_at'])} · journal entry {entry['entry_id']}")
@@ -172,45 +190,8 @@ def _fmt_money(v):
 
 
 def _render_brief_entry(conn, settings, entry, expected) -> None:
-    p = json.loads(entry["payload_json"])
-    v = p.get("validation", {})
-    trading_date = p.get("trading_date")
-    if trading_date and trading_date < expected.isoformat():
-        st.error(f"STALE: this result is for {trading_date}. There is no result yet for {expected.isoformat()} "
-                 "(see Health page for the last run and any missed runs).")
-    if p.get("late"):
-        st.warning(f"LATE: this result became available at {format_new_york(p.get('available_at'))}, "
-                   f"after the {settings.raw['schedule']['deadline']} New York deadline.")
-    status_color = {"passed": "green", "flagged": "orange", "rejected": "red"}.get(v.get("status"), "gray")
-    st.markdown(f"**{esc(entry['title'])}** · check result :{status_color}[**{v.get('status', 'unknown').upper()}**] · "
-                f"{esc(p.get('origin', ''))}")
-    st.caption(f"Recorded {format_new_york(entry['fetched_at'])} · journal entry {entry['entry_id']}"
-               + (f" · covers trading date {trading_date}" if trading_date else ""))
-    for c in journal.corrections_for(conn, entry["entry_id"]):
-        st.warning(f"**Correction ({format_new_york(c['fetched_at'])}):** {esc(c['body'])}")
-    for w in v.get("warnings", []):
-        st.warning(esc(w))
-    if entry["run_id"]:
-        from ..packet import group_checks
-        checks = conn.execute("SELECT * FROM source_checks WHERE run_id=? AND (ticker IS NULL OR ticker=?)",
-                              (entry["run_id"], p.get("candidate"))).fetchall()
-        cov = coverage_summary(checks)
-        cols = st.columns(4)
-        cols[0].metric("Source calls OK", cov["ok"])
-        cols[1].metric("No results", cov["no_results"])
-        cols[2].metric("Partial", cov["partial"])
-        cols[3].metric("Unavailable", cov["unavailable"])
-        with st.expander("Source coverage details"):
-            st.dataframe(group_checks(checks), hide_index=True, width="stretch")
-    body = [l for l in p["brief_markdown"].splitlines() if not l.strip().upper().startswith(("CANDIDATE:", "RUN:"))]
-    body = [("###" + l[1:]) if l.startswith("# ") else ("####" + l[2:]) if l.startswith("## ") else l for l in body]
-    st.markdown(esc("\n".join(body)))
-    if p.get("packet_path"):
-        from pathlib import Path
-        path = Path(p["packet_path"])
-        if path.exists():
-            st.download_button("Download the research packet for this run", path.read_text(encoding="utf-8"),
-                               file_name=path.name, mime="text/markdown")
+    from .research_view import render_research
+    render_research(conn, settings, entry, expected)
 
 
 def page_review(conn, settings) -> None:
@@ -218,7 +199,7 @@ def page_review(conn, settings) -> None:
     from ..brief import candidate_brief, no_candidate_brief
     from ..selection import select_candidate
 
-    st.header("Review a brief")
+    header("Evidence first", "Review a brief", "Check your interpretation against the original evidence.")
     st.write("Paste a brief (yours, or one written by your own Claude from the research packet). The app checks "
              "every number against the right company, metric, period and source, and every citation against the "
              "evidence available at the run's cutoff. Nothing is sent anywhere.")
@@ -236,7 +217,11 @@ def page_review(conn, settings) -> None:
                         placeholder=f"CANDIDATE: TICKER\nRUN: {run['run_id']}\n- [CONFIRMED] ... [ev: ...]")
     if st.button("Check brief") and text.strip():
         st.session_state["brief_report"] = review.validate(conn, text, run["run_id"])
+        st.session_state["brief_checked_input"] = (text, run["run_id"])
     report = st.session_state.get("brief_report")
+    if report and st.session_state.get("brief_checked_input") != (text, run["run_id"]):
+        st.info("The brief or run has changed. Check this version before saving it.")
+        report = None
     if report:
         color = {"passed": "green", "flagged": "orange", "rejected": "red"}[report.status]
         st.markdown(f"### Result: :{color}[{report.status.upper()}]")
@@ -249,18 +234,21 @@ def page_review(conn, settings) -> None:
                            "problems": "; ".join(c["problems"]) or "none"} for c in report.claims],
                          hide_index=True, width="stretch")
         if st.button("Save to journal" + (" (as a rejected note)" if report.status == "rejected" else "")):
+            # The editor may have changed since Check brief was clicked.
+            report = review.validate(conn, text, run["run_id"])
             entry = review.save_brief(conn, text, report, "Brief checked in the dashboard")
             st.success(f"Saved as journal entry {entry}.")
             del st.session_state["brief_report"]
 
 
 def page_watchlist(conn, settings) -> None:
-    st.header("Screening, shortlist & watchlist")
+    header("Find your next research question", "Market screening", "Your shortlist, screening factors, and the companies you're following.")
+    research_button(conn, settings, "screening_research")
     st.caption("Scores are for prioritizing what to read first. They are NOT probabilities of success. "
                "Reddit/social activity never adds points.")
     runs = _screen_runs(conn)
     if not runs:
-        st.warning("No screening run yet. Run `python -m omkaka screen` (free sources; takes several minutes).")
+        st.info("Your shortlist will appear here after your first research run. You can add companies to your watchlist below.")
     else:
         labels = {f"{r['run_id']} · {format_new_york(r['started_at'])} · {r['status']}": r for r in runs}
         run = labels[st.selectbox("Screening run", list(labels))]
@@ -279,7 +267,7 @@ def page_watchlist(conn, settings) -> None:
         outcome_text = {"passed": "passed", "insufficient_data": "WITHHELD: insufficient data",
                         "watchlist_only": "watchlist only (failed screen)", "failed_threshold": "failed"}
         st.dataframe([{
-            "rank": r["rank"] or "—", "ticker": r["ticker"], "company": r["company_name"],
+            "rank": str(r["rank"]) if r["rank"] is not None else "—", "ticker": r["ticker"], "company": r["company_name"],
             "outcome": outcome_text[r["outcome"]],
             "priority score": "—" if r["score"] is None else f"{r['score']:.1f} / 100",
             "market cap": _fmt_money(json.loads(r["inputs_json"]).get("market_cap")),
@@ -324,7 +312,7 @@ def page_watchlist(conn, settings) -> None:
             for reason in json.loads(row["reasons_json"]):
                 key = (row["outcome"], reason_category(reason))
                 reasons[key] = reasons.get(key, 0) + 1
-        st.dataframe([{"outcome": k[0], "reason": k[1], "companies": n}
+        st.dataframe([{"outcome": k[0].replace("_", " ").title(), "reason": k[1], "companies": n}
                       for k, n in sorted(reasons.items(), key=lambda kv: -kv[1])], hide_index=True, width="stretch")
 
         st.markdown("#### Research packet")
@@ -388,7 +376,7 @@ def page_evidence(conn, settings) -> None:
 def page_portfolio(conn, settings) -> None:
     from .. import portfolio as pf
 
-    st.header("Paper portfolio vs SPY")
+    header("Practice with perspective", "Paper portfolio", "Track your decisions alongside the S&P 500 benchmark.")
     st.caption("Paper money only: no broker, no real orders. Nothing is bought automatically; every order is yours.")
     filled = pf.fill_pending(conn, settings)
     for f in filled:
@@ -426,11 +414,12 @@ def page_portfolio(conn, settings) -> None:
                        "placed": format_new_york(o["decided_at"])} for o in pending], hide_index=True, width="stretch")
 
     if hist:
-        st.markdown(f"#### Return on contributions: paper portfolio vs {bm} mirror (same money, same timing, price-only)")
+        st.markdown("#### Performance over time")
+        st.caption(f"Return on contributions · Your portfolio vs {bm} · Same deposits, same timing · Price-only")
         pct = lambda x: None if x is None else round(x * 100, 3)
         chart = [{"date": h["date"], "Paper portfolio": pct(h["portfolio_return"]),
                   f"{bm} mirror": pct(h["spy_return"])} for h in hist]
-        st.line_chart(chart, x="date", y=["Paper portfolio", f"{bm} mirror"], color=["#2a78d6", "#eb6834"],
+        st.line_chart(chart, x="date", y=["Paper portfolio", f"{bm} mirror"], color=["#7060d8", "#21a68b"],
                       y_label="Return (%)")
         st.caption("Gaps in the portfolio line mean a holding had no price that day (unknown, not zero).")
         with st.expander("Table view"):
@@ -504,7 +493,7 @@ def page_portfolio(conn, settings) -> None:
 
 
 def page_journal(conn, settings) -> None:
-    st.header("Research journal (append-only)")
+    header("A record you can trust", "Research journal", "Your notes, checked briefs, and decisions. Original entries are preserved.")
     ok, problems = journal.verify_chain(conn)
     if ok:
         st.success("Integrity check passed: no entry has been altered or removed.")
@@ -540,7 +529,7 @@ def page_health(conn, settings) -> None:
     from ..daily import latest_daily_status
     from ..maintenance import backup_database, doctor
 
-    st.header("Health: sources, schedule, spending, backups")
+    header("Workspace status", "Health & spending", "See what's connected, what's current, and what needs attention.")
     st.write(f"**Mode:** {settings.mode.upper()} · **Database:** `{settings.db_path}`")
     last = store.last_successful_run(conn)
     st.write(f"**Last successful run:** {format_new_york(last['finished_at']) if last else 'none yet'}")
@@ -587,7 +576,7 @@ def page_health(conn, settings) -> None:
                        "checked": format_new_york(c["fetched_at"])} for c in checks],
                      hide_index=True, width="stretch")
     else:
-        st.write("No source has been checked yet. Try `python -m omkaka sources-check`.")
+        st.write("No source has been checked yet. Open Setup & connections to test them.")
 
     st.markdown("#### Secrets (set / not set only — values are never shown)")
     st.dataframe([{"name": k, "status": "set" if v else "not set"} for k, v in secret_status().items()],
@@ -595,6 +584,7 @@ def page_health(conn, settings) -> None:
 
 
 PAGES = {
+    "Markets": page_markets,
     "Today": page_today,
     "Watchlist & screening": page_watchlist,
     "Review a brief": page_review,
@@ -602,14 +592,34 @@ PAGES = {
     "Paper portfolio": page_portfolio,
     "Journal": page_journal,
     "Health & spending": page_health,
+    "Setup & connections": page_setup,
 }
 
 
 def main() -> None:
     settings = load_settings()
-    st.sidebar.title("OmKakaFinance")
-    st.sidebar.caption("DEMO MODE" if settings.is_demo else "Live mode")
-    choice = st.sidebar.radio("View", list(PAGES))
+    apply_style()
+    st.sidebar.html('<div class="ok-brand"><div class="ok-logo">O</div><div><div class="ok-brand-name">OmKakaFinance</div><small>RESEARCH WORKSPACE</small></div></div>')
+    st.sidebar.caption("EXPLORE YOUR WORKSPACE")
+    if "view" not in st.session_state:
+        requested = st.query_params.get("view")
+        st.session_state["view"] = ("Setup & connections" if requested == "setup" else
+                                    "Today" if settings.is_demo else "Markets")
+    choice = st.sidebar.radio("View", list(PAGES), key="view", label_visibility="collapsed")
+    st.sidebar.divider()
+    if settings.is_demo:
+        st.sidebar.caption("DEMO WORKSPACE · FICTIONAL DATA")
+        st.sidebar.link_button("Open live workspace ↗", "http://localhost:8501/", width="stretch")
+    else:
+        from ..setup import missing_credentials
+        st.sidebar.caption("REAL MARKET DATA · " + ("MANUAL RESEARCH" if missing_credentials() else "DAILY SOURCES CONFIGURED"))
+        st.sidebar.link_button("View offline demo ↗", "http://localhost:8502/", width="stretch")
+    st.sidebar.caption("Your research stays on this computer.\n\n$0 additional spending · No paid AI")
+    from ..timeutil import NEW_YORK, utc_now
+    now = utc_now().astimezone(NEW_YORK)
+    badge = "DEMO WORKSPACE" if settings.is_demo else "LIVE WORKSPACE"
+    st.html(f'<div class="ok-top"><span>WORKSPACE / {html_escape(choice.upper())}</span>'
+            f'<span>{now.strftime("%A, %B %d")} &nbsp; <b class="ok-pill">{badge}</b></span></div>')
     _banner(settings)
     try:
         conn = _connect(settings)
@@ -620,3 +630,4 @@ def main() -> None:
         PAGES[choice](conn, settings)
     finally:
         conn.close()
+    st.html('<div class="ok-footer">OMKAKAFINANCE &nbsp; / &nbsp; Independent research. Recorded evidence. Your judgment.</div>')

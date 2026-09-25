@@ -44,35 +44,23 @@ def _launch(mode: str) -> int:
     print(f"Starting dashboard in {mode.upper()} mode. Press Ctrl+C in this window to stop.")
     return subprocess.call(
         [sys.executable, "-m", "streamlit", "run", str(APP_FILE),
-         "--browser.gatherUsageStats", "false", "--server.address", "localhost"],
+         "--browser.gatherUsageStats", "false", "--server.address", "localhost",
+         "--server.port", os.environ.get("STREAMLIT_SERVER_PORT", "8502" if mode == "demo" else "8501")],
         env=env, cwd=str(PROJECT_ROOT),
     )
 
 
 def _sources_check() -> int:
     """Tiny live test of each free source. Recorded as a normal run so it shows in Source health."""
-    from .pipeline import build_clients, recent_weekdays
-    from .timeutil import NEW_YORK, utc_now
-
+    from .setup import check_connections
     s, conn = _live_conn()
-    now = utc_now()
-    run_id = store.start_run(conn, "manual", now + timedelta(minutes=30), {"purpose": "sources-check"}, now=now)
-    c = build_clients(conn, s)
-    day = recent_weekdays(now.astimezone(NEW_YORK).date(), 1)[0]
-    checks = [
-        ("SEC company list", lambda: c.sec.company_tickers(), None),
-        ("Market data (end of day)", lambda: c.massive.grouped_daily(day), None),
-        ("News", lambda: c.finnhub.company_news("AAPL", day - timedelta(days=3), day), "AAPL"),
-        ("Reddit", lambda: c.reddit.search("AAPL", None), "AAPL"),
-    ]
-    for name, call, ticker in checks:
-        r = call()
-        store.record_source_check(conn, run_id, name, r.provider, r.status, reason=r.reason, ticker=ticker,
-                                  query=r.url, fetched_at=r.fetched_at)
-        print(f"{name:28} {r.status.value:15} {r.reason or ''}")
-    store.finish_run(conn, run_id, "completed", now=utc_now())
-    conn.close()
-    return 0
+    try:
+        rows = check_connections(conn, s)
+    finally:
+        conn.close()
+    for row in rows:
+        print(f"{row['source']:28} {row['status']:15} {row['detail']}")
+    return 0 if all(r["passed"] for r in rows if r["required"]) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -85,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scheduled", action="store_true", help="daily: started by Task Scheduler")
     parser.add_argument("--brief", help="paper buy/sell: journal entry id of the research brief behind it")
     parser.add_argument("--wake", action="store_true", help="schedule install: allow waking a sleeping PC")
+    parser.add_argument("--retry-failed", action="store_true", help="daily: retry a failed result while preserving its history")
     a = parser.parse_args(argv)
 
     if a.command == "init":
@@ -164,10 +153,15 @@ def main(argv: list[str] | None = None) -> int:
         from .timeutil import format_new_york, utc_now
 
         s, conn = _live_conn()
+        from .setup import missing_credentials
+        if missing_credentials():
+            conn.close()
+            print("Setup incomplete: add your SEC contact details and market/news keys in Setup & connections.")
+            return 1
         stamp = lambda m: print(f"[{format_new_york(utc_now())}] {m}", flush=True)
         try:
             result = daily_job(conn, s, lambda: build_clients(conn, s),
-                               run_kind="scheduled" if a.scheduled else "manual", log=stamp)
+                               run_kind="scheduled" if a.scheduled else "manual", log=stamp, retry_failed=a.retry_failed and not a.scheduled)
         finally:
             conn.close()
         stamp(f"{result['action']}: {result.get('reason') or result.get('candidate') or 'no qualifying candidate'}"
@@ -178,7 +172,11 @@ def main(argv: list[str] | None = None) -> int:
 
         action = a.args[0] if a.args else "status"
         if action == "install":
-            print(schedule.install(PROJECT_ROOT, wake=a.wake))
+            try:
+                print(schedule.install(PROJECT_ROOT, wake=a.wake))
+            except (ValueError, RuntimeError) as exc:
+                print(str(exc))
+                return 1
         elif action == "uninstall":
             print(schedule.uninstall())
         else:
@@ -221,7 +219,10 @@ def main(argv: list[str] | None = None) -> int:
         for status, name, detail in rows:
             print(f"[{status:7}] {name}: {detail}")
         problems = [r for r in rows if r[0] == "PROBLEM"]
-        print("\nAll essential checks passed." if not problems else f"\n{len(problems)} problem(s) need attention.")
+        warnings = [r for r in rows if r[0] == "WARN"]
+        print(f"\n{len(problems)} problem(s) need attention." if problems else
+              f"\nApp health passed; {len(warnings)} setup or data item(s) still need attention." if warnings else
+              "\nAll essential checks passed.")
         return 1 if problems else 0
     elif a.command == "watch":
         s, conn = _live_conn()

@@ -78,6 +78,13 @@ min_interval_seconds = 1.0
 max_calls_per_run = 40
 paid = false
 
+[providers.yahoo]
+# Public Yahoo Finance chart and RSS endpoints for manual research only.
+# This view does not replace SEC evidence or the verified daily screening pipeline.
+min_interval_seconds = 1.0
+max_calls_per_run = 30
+paid = false
+
 # ------------------------------------------------------------------ screening
 # Stage 1 (whole market, cheap): exchange, price, market cap, liquidity.
 # Stage 2 (shortlist only): filings, fundamentals, news, Reddit.

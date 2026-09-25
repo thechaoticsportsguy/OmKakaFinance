@@ -64,13 +64,29 @@ def task_xml(project_root: Path, wake: bool = False) -> str:
 
 
 def install(project_root: Path, wake: bool = False) -> str:
+    from . import db
+    from .config import load_settings
+    from .setup import readiness
+
+    settings = load_settings("live")
+    if not settings.db_path.exists():
+        raise ValueError("Initialize the live workspace before enabling the schedule.")
+    conn = db.connect(settings.db_path, "live")
+    try:
+        ready = readiness(conn, settings)
+    finally:
+        conn.close()
+    if not ready["ready"]:
+        raise ValueError("Schedule is not enabled. " + " ".join(ready["reasons"]))
     xml_path = project_root / "data" / "omkaka_task.xml"
     xml_path.parent.mkdir(parents=True, exist_ok=True)
     xml_path.write_text(task_xml(project_root, wake), encoding="utf-16")
     if os.name != "nt":
         return f"Not on Windows: wrote {xml_path} but did not install it."
     out = subprocess.run(["schtasks", "/Create", "/TN", TASK_NAME, "/XML", str(xml_path), "/F"],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, timeout=20)
+    if out.returncode:
+        raise RuntimeError("Windows could not install the schedule. " + (out.stdout + out.stderr).strip())
     return (out.stdout + out.stderr).strip()
 
 
@@ -84,5 +100,11 @@ def uninstall() -> str:
 def status() -> str:
     if os.name != "nt":
         return "Not on Windows: scheduled task status unavailable."
-    out = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME, "/V", "/FO", "LIST"], capture_output=True, text=True)
+    try:
+        out = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME, "/V", "/FO", "LIST"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return "Scheduled task status unavailable: Windows did not respond."
+    if out.returncode:
+        return "Scheduled task is not installed or could not be queried."
     return (out.stdout + out.stderr).strip() or "No output from schtasks."

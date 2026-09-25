@@ -7,3 +7,11 @@ gatherUsageStats = false
 
 [client]
 toolbarMode = "minimal"  # hides Streamlit's "Deploy" button: this app is never published
+
+[theme]
+base = "light"
+primaryColor = "#6054d6"
+backgroundColor = "#f6f7fb"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#19233b"
+font = "sans serif"

@@ -17,7 +17,7 @@ def ny(y, m, d, hh, mm):
     return datetime(y, m, d, hh, mm, tzinfo=NEW_YORK).astimezone(timezone.utc)
 
 
-def job(conn, now, tmp_path, transport=None):
+def job(conn, now, tmp_path, transport=None, retry_failed=False):
     settings = load_settings("live")
     tick = itertools.count()
 
@@ -25,7 +25,7 @@ def job(conn, now, tmp_path, transport=None):
         t = transport or FixtureTransport(now.astimezone(NEW_YORK).date())
         return build_clients(conn, settings, transport=t, sleep=lambda s: None,
                              now=lambda: now + timedelta(seconds=next(tick)), demo_credentials=True)
-    return daily_job(conn, settings, make, now=now, log=lambda m: None, lock_path=tmp_path / "daily.lock")
+    return daily_job(conn, settings, make, now=now, log=lambda m: None, lock_path=tmp_path / "daily.lock", retry_failed=retry_failed)
 
 
 def daily_entries(conn):
@@ -91,6 +91,18 @@ def test_failures_retry_then_publish_no_candidate(live_conn, tmp_path):
 
 def test_failure_after_deadline_does_not_retry(live_conn, tmp_path):
     assert job(live_conn, ny(2026, 9, 24, 7, 0), tmp_path, transport=Down())["action"] == "failed_final"
+
+
+def test_manual_recovery_preserves_failed_result_and_does_not_repeat_success(live_conn, tmp_path):
+    failed = job(live_conn, ny(2026, 9, 24, 7, 0), tmp_path, transport=Down())
+    assert failed["action"] == "failed_final"
+    original = dict(daily_entries(live_conn)[0])
+    assert job(live_conn, ny(2026, 9, 24, 7, 5), tmp_path)["action"] == "skipped"
+    recovered = job(live_conn, ny(2026, 9, 24, 7, 10), tmp_path, retry_failed=True)
+    assert recovered["action"] == "done"
+    assert len(daily_entries(live_conn)) == 2
+    assert dict(daily_entries(live_conn)[0]) == original
+    assert job(live_conn, ny(2026, 9, 24, 7, 20), tmp_path, retry_failed=True)["action"] == "skipped"
 
 
 def test_lock_blocks_a_second_copy(live_conn, tmp_path):

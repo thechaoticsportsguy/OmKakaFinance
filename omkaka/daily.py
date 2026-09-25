@@ -99,7 +99,7 @@ def record_missed_days(conn, settings: Settings, today, now: datetime) -> list[s
 
 def daily_job(conn, settings: Settings, make_clients: Callable[[], object], now: datetime | None = None,
               run_kind: str = "scheduled", log: Callable[[str], None] = print,
-              lock_path: Path | None = None) -> dict:
+              lock_path: Path | None = None, retry_failed: bool = False) -> dict:
     now = now or utc_now()
     sched = settings.raw["schedule"]
     now_ny = now.astimezone(NEW_YORK)
@@ -109,7 +109,11 @@ def daily_job(conn, settings: Settings, make_clients: Callable[[], object], now:
         return {"action": "skipped", "reason": f"market closed today ({closed})"}
     if now_ny.time() < dtime.fromisoformat(sched["window_start"]):
         return {"action": "skipped", "reason": f"too early (research window opens {sched['window_start']} New York time)"}
-    if conn.execute("SELECT 1 FROM journal_entries WHERE dedupe_key = ?", (_daily_key(today),)).fetchone():
+    previous = conn.execute(
+        "SELECT j.*, r.status AS run_status FROM journal_entries j LEFT JOIN runs r ON r.run_id=j.run_id "
+        "WHERE j.dedupe_key=? OR j.dedupe_key LIKE ? ORDER BY j.entry_seq DESC LIMIT 1",
+        (_daily_key(today), _daily_key(today) + "-retry-%")).fetchone()
+    if previous and not (retry_failed and previous["run_status"] == "failed"):
         return {"action": "skipped", "reason": f"today's result ({today}) is already recorded"}
 
     lock = Lock(lock_path or settings.db_path.parent / "daily.lock", now)
@@ -121,6 +125,8 @@ def daily_job(conn, settings: Settings, make_clients: Callable[[], object], now:
         attempts = conn.execute("SELECT COUNT(*) FROM runs WHERE run_id LIKE ? AND started_at >= ?",
                                 (f"daily-{today.isoformat()}-%", to_utc_iso(day_start))).fetchone()[0]
         run_id = f"daily-{today.isoformat()}-{attempts + 1}"
+        # A user-requested recovery is a new journal entry; preserve the failed result.
+        result_key = f"{_daily_key(today)}-retry-{attempts + 1}" if previous else _daily_key(today)
         log(f"Daily research for {today} (attempt {attempts + 1}), run {run_id}")
         clients = make_clients()
         summary = run_screen(conn, settings, clients, run_kind=run_kind, run_id=run_id, log=log)
@@ -136,10 +142,10 @@ def daily_job(conn, settings: Settings, make_clients: Callable[[], object], now:
             text = no_candidate_brief(run_id, [], reason=f"Research unavailable: {summary.get('reason')}")
             report = validate(conn, text, run_id)
             entry = save_brief(conn, text, report, "Automatic result (research failed)", extra,
-                               dedupe_key=_daily_key(today))
+                               dedupe_key=result_key)
             return {"action": "failed_final", "reason": summary.get("reason"), "entry": entry, "run_id": run_id}
 
-        result = publish_result(conn, settings, run_id, extra, dedupe_key=_daily_key(today))
+        result = publish_result(conn, settings, run_id, extra, dedupe_key=result_key)
         _after_success(conn, settings, now, log)
         return result
     finally:
